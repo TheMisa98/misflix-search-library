@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+@dataclass(frozen=True)
+class Settings:
+    movies_dir: Path
+    books_dir: Path
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings(
+        movies_dir=Path(os.getenv("MISFLIX_MOVIES_DIR", "~/Descargas/Peliculas")).expanduser(),
+        books_dir=Path(os.getenv("MISFLIX_BOOKS_DIR", "~/Descargas/Libros")).expanduser(),
+    )
