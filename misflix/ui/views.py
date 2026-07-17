@@ -1,21 +1,56 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from rich.console import Console
-from rich.table import Table
+from rich.panel import Panel
 
 from misflix.core.models import Media
+from misflix.ui.image_render import Card, CoverRenderer, FetchBytes
 
 console = Console()
 
+# Cada resultado puede venir de una fuente distinta; esta funcion decide,
+# para un media dado, con que cliente HTTP bajar su portada (o None para
+# dejar que kitten la pida el mismo).
+FetcherFor = Callable[[Media], "FetchBytes | None"]
 
-def show_results(results: list[Media]) -> None:
-    table = Table(title="Resultados")
-    table.add_column("#", style="cyan", no_wrap=True)
-    table.add_column("Titulo")
-    table.add_column("Tipo")
-    table.add_column("Fuente")
 
-    for i, media in enumerate(results, start=1):
-        table.add_row(str(i), media.title, media.kind.value, media.source)
+def show_results(results: list[Media], fetcher_for: FetcherFor | None = None, start: int = 0) -> tuple[int, int]:
+    """Dibuja, a partir del indice `start` (0-based, para paginar — ver
+    `cli/search.py`), tantos resultados como entren verticalmente en la pantalla
+    actual (ver `CoverRenderer.render_grid`). Cada card se numera con su posicion
+    absoluta en `results` (`start`+offset+1), no con su posicion dentro de la
+    pagina, asi el numero de un resultado no cambia entre paginas. Devuelve el
+    rango `[start, end)` efectivamente dibujado — el caller debe usarlo, no
+    `len(results)`, para saber que numeros son validos elegir: mostrar #1-#4 pero
+    dejar elegir hasta #8 confundiria al usuario con resultados invisibles."""
+    if not results:
+        console.print(Panel("No se encontraron resultados.", border_style="yellow", expand=False))
+        return (0, 0)
 
-    console.print(table)
+    cards = []
+    for offset, media in enumerate(results[start:]):
+        i = start + offset + 1
+        year = f" ({media.year})" if media.year else ""
+        body = (
+            f"[bold]{media.title}[/bold]{year}\n"
+            f"[dim]{media.kind.value} · {media.source}[/dim]\n"
+            f"[dim]id: {media.id}[/dim]"
+        )
+        panel = Panel(body, title=f"#{i}", title_align="left", border_style="cyan", expand=False)
+        fetch_bytes = fetcher_for(media) if (fetcher_for and media.cover_url) else None
+        cards.append(Card(panel, media.cover_url, fetch_bytes))
+
+    rendered = CoverRenderer().render_grid(cards, columns=2)
+    end = start + rendered
+    if end < len(results):
+        console.print(
+            Panel(
+                f"Mostrando {start + 1}-{end} de {len(results)} resultados. "
+                "Escribi 'mas' para ver los siguientes, o afina la busqueda.",
+                border_style="yellow",
+                expand=False,
+            )
+        )
+    return (start, end)

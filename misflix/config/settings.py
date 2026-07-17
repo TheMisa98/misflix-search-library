@@ -14,6 +14,7 @@ load_dotenv()
 class Settings:
     movies_dir: Path
     books_dir: Path
+    series_dir: Path
 
 
 @lru_cache
@@ -21,4 +22,5 @@ def get_settings() -> Settings:
     return Settings(
         movies_dir=Path(os.getenv("MISFLIX_MOVIES_DIR", "~/Descargas/Peliculas")).expanduser(),
         books_dir=Path(os.getenv("MISFLIX_BOOKS_DIR", "~/Descargas/Libros")).expanduser(),
+        series_dir=Path(os.getenv("MISFLIX_SERIES_DIR", "~/Descargas/Series")).expanduser(),
     )
