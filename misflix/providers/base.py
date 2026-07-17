@@ -1,9 +1,38 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Protocol
 
 from misflix.core.models import DownloadOption, Media
 from misflix.infra.http_client import HttpClient
+
+
+class _HasText(Protocol):
+    @property
+    def text(self) -> str:
+        """El html crudo de la respuesta."""
+        ...
+
+
+class HttpGetClient(Protocol):
+    """Contrato minimo que necesita un `StaticProvider` para pedir paginas.
+
+    Tipado de forma estructural (en vez de contra `HttpClient` directo) para
+    que un provider detras de proteccion extra (ej. `ZonaLerosProvider` con
+    `CloudflareHttpClient`) pueda usar su propio cliente sin heredar un tipo
+    de atributo incompatible con el de la clase base.
+    """
+
+    def get(self, url: str) -> _HasText:
+        """Pide `url` y devuelve una respuesta con `.text` (el html crudo).
+
+        Args:
+            url: Url a pedir.
+
+        Returns:
+            La respuesta, con al menos un atributo `.text`.
+        """
+        ...
 
 
 class BaseProvider(ABC):
@@ -56,7 +85,9 @@ class BaseProvider(ABC):
 class StaticProvider(BaseProvider):
     """Provider para repos servidos como HTML plano (httpx + BeautifulSoup)."""
 
-    def __init__(self, http_client: HttpClient | None = None):
+    http: HttpGetClient
+
+    def __init__(self, http_client: HttpGetClient | None = None):
         """Inicializa el provider.
 
         Args:

@@ -143,7 +143,9 @@ def test_get_media_series_parses_title_cover_and_year():
     assert media.kind == MediaKind.SERIES
     assert media.year == 2008
     assert media.cover_url == "https://www.zona-leros.com/storage/series_tumbl/breaking-bad-cover-1qs.jpg"
-    assert media.page_url == "https://www.zona-leros.com/series/breaking-bad-hd-latino-2020-online-gratis-free-zonaleros"
+    assert (
+        media.page_url == "https://www.zona-leros.com/series/breaking-bad-hd-latino-2020-online-gratis-free-zonaleros"
+    )
 
 
 def test_get_media_episode_uses_episode_url():

@@ -25,15 +25,11 @@ class FakeDownloader:
 
 
 def make_media(title: str, year: int | None = None) -> Media:
-    return Media(
-        id=title, title=title, kind=MediaKind.MOVIE, source="a", page_url="http://example.com", year=year
-    )
+    return Media(id=title, title=title, kind=MediaKind.MOVIE, source="a", page_url="http://example.com", year=year)
 
 
 def make_episode(title: str) -> Media:
-    return Media(
-        id=f"episode:{title}", title=title, kind=MediaKind.SERIES, source="a", page_url="http://example.com"
-    )
+    return Media(id=f"episode:{title}", title=title, kind=MediaKind.SERIES, source="a", page_url="http://example.com")
 
 
 @pytest.fixture(autouse=True)

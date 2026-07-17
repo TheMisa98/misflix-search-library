@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from curl_cffi import BrowserTypeLiteral
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests import Response
 
@@ -9,7 +10,7 @@ from misflix.infra.browser_cookies import load_domain_cookies
 from misflix.infra.browser_launch import open_in_browser
 
 DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"
-DEFAULT_IMPERSONATE = "firefox135"
+DEFAULT_IMPERSONATE: BrowserTypeLiteral = "firefox135"
 
 
 class CloudflareBlockedError(RuntimeError):
@@ -41,7 +42,7 @@ class CloudflareHttpClient:
         self,
         domain: str,
         user_agent: str = DEFAULT_USER_AGENT,
-        impersonate: str = DEFAULT_IMPERSONATE,
+        impersonate: BrowserTypeLiteral = DEFAULT_IMPERSONATE,
         timeout: float = 15.0,
         resolve_timeout: float = 180.0,
         poll_interval: float = 2.0,
@@ -84,9 +85,7 @@ class CloudflareHttpClient:
             self._resolve_via_browser(url)
             response = self._request(url)
             if _is_challenge(response):
-                raise CloudflareBlockedError(
-                    f"Cloudflare sigue bloqueando {url} despues de la verificacion manual."
-                )
+                raise CloudflareBlockedError(f"Cloudflare sigue bloqueando {url} despues de la verificacion manual.")
         response.raise_for_status()
         return response
 

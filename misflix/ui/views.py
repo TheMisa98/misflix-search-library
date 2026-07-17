@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -17,14 +17,27 @@ FetcherFor = Callable[[Media], "FetchBytes | None"]
 
 
 def show_results(results: list[Media], fetcher_for: FetcherFor | None = None, start: int = 0) -> tuple[int, int]:
-    """Dibuja, a partir del indice `start` (0-based, para paginar — ver
-    `cli/search.py`), tantos resultados como entren verticalmente en la pantalla
-    actual (ver `CoverRenderer.render_grid`). Cada card se numera con su posicion
-    absoluta en `results` (`start`+offset+1), no con su posicion dentro de la
-    pagina, asi el numero de un resultado no cambia entre paginas. Devuelve el
-    rango `[start, end)` efectivamente dibujado — el caller debe usarlo, no
-    `len(results)`, para saber que numeros son validos elegir: mostrar #1-#4 pero
-    dejar elegir hasta #8 confundiria al usuario con resultados invisibles."""
+    """Dibuja tantos resultados como entren en la pantalla, a partir de `start`.
+
+    `start` es 0-based, para paginar (ver `cli/search.py`); cuantos entran
+    depende del alto real de la terminal (ver `CoverRenderer.render_grid`).
+    Cada card se numera con su posicion absoluta en `results`
+    (`start`+offset+1), no con su posicion dentro de la pagina, asi el
+    numero de un resultado no cambia entre paginas.
+
+    Args:
+        results: Resultados completos a paginar (no solo los de esta pagina).
+        fetcher_for: Callback que, para un `Media`, devuelve el cliente HTTP
+            con el que bajar su portada (o None para dejar que `kitten` la
+            pida el mismo).
+        start: Indice (0-based) desde donde empezar a dibujar.
+
+    Returns:
+        El rango `[start, end)` efectivamente dibujado — el caller debe
+        usarlo, no `len(results)`, para saber que numeros son validos
+        elegir: mostrar #1-#4 pero dejar elegir hasta #8 confundiria al
+        usuario con resultados invisibles.
+    """
     if not results:
         console.print(Panel("No se encontraron resultados.", border_style="yellow", expand=False))
         return (0, 0)

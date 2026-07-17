@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
+
 from misflix.core.models import Media, MediaKind
 from misflix.core.ports import SourceProvider
 
@@ -15,7 +17,7 @@ class SearchService:
         """
         self._providers = providers
 
-    def search(self, query: str, source: str | None = None, kinds: set[MediaKind] | None = None) -> list[Media]:
+    def search(self, query: str, source: str | None = None, kinds: AbstractSet[MediaKind] | None = None) -> list[Media]:
         """Busca `query` en uno o todos los providers registrados.
 
         `kinds` filtra el resultado agregado por `Media.kind` (ej. solo

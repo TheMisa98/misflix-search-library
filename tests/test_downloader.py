@@ -34,9 +34,7 @@ def test_download_reports_progress(tmp_path, monkeypatch):
     dest = tmp_path / "movie.rar"
     calls: list[tuple[int, int]] = []
 
-    HttpxDownloader().download(
-        "https://example.com/movie.rar", dest, on_progress=lambda d, t: calls.append((d, t))
-    )
+    HttpxDownloader().download("https://example.com/movie.rar", dest, on_progress=lambda d, t: calls.append((d, t)))
 
     assert calls
     assert calls[-1] == (100, 100)

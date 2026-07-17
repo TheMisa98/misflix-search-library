@@ -4,6 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from misflix.infra.http_client import DEFAULT_HEADERS
+from misflix.infra.soup import attr
 
 
 class MediaFireResolveError(RuntimeError):
@@ -51,7 +52,5 @@ def resolve_direct_url(page_url: str) -> str:
     soup = BeautifulSoup(response.text, "lxml")
     button = soup.select_one("a#downloadButton[href]")
     if not button:
-        raise MediaFireResolveError(
-            f"El link parece caido o el archivo ya no esta disponible en Mediafire: {page_url}"
-        )
-    return button["href"]
+        raise MediaFireResolveError(f"El link parece caido o el archivo ya no esta disponible en Mediafire: {page_url}")
+    return attr(button, "href")

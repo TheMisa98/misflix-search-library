@@ -38,7 +38,7 @@ def resolve_title(query: str, year_hint: int | None = None) -> tuple[str, int | 
         response = httpx.get(url, headers=DEFAULT_HEADERS, timeout=10.0)
         response.raise_for_status()
         results = response.json().get("d", [])
-    except (httpx.HTTPError, ValueError):
+    except httpx.HTTPError, ValueError:
         return None
 
     movies = [item for item in results if item.get("qid") == "movie"]
@@ -48,16 +48,17 @@ def resolve_title(query: str, year_hint: int | None = None) -> tuple[str, int | 
     def most_popular(candidates: list[dict]) -> dict:
         return min(candidates, key=lambda item: item.get("rank", float("inf")))
 
+    def title_year(match: dict) -> tuple[str, int | None] | None:
+        title = match.get("l")
+        return (title, match.get("y")) if isinstance(title, str) else None
+
     if year_hint is not None:
         exact_year = [m for m in movies if m.get("y") == year_hint]
         if exact_year:
-            match = most_popular(exact_year)
-            return match.get("l"), match.get("y")
+            return title_year(most_popular(exact_year))
 
         close_year = [m for m in movies if m.get("y") is not None and abs(m["y"] - year_hint) <= 1]
         if close_year:
-            match = most_popular(close_year)
-            return match.get("l"), match.get("y")
+            return title_year(most_popular(close_year))
 
-    match = most_popular(movies)
-    return match.get("l"), match.get("y")
+    return title_year(most_popular(movies))

@@ -18,9 +18,30 @@ uv run main.py <command>             # run the CLI (e.g. uv run main.py search m
 misflix <command>                    # same, via the ~/.local/bin/misflix wrapper (no uv needed)
 uv run pytest                        # run the full test suite
 uv run pytest tests/test_download_service.py::test_download_creates_dest_dir_and_delegates_to_downloader  # single test
+uv run ruff check .                  # lint (style + import order + Google-style docstring formatting on misflix/)
+uv run ruff format .                 # auto-format
+uv run mypy                          # type-check misflix/ (scoped via [tool.mypy] files, tests/ excluded)
 ```
 
 Requires Python >=3.14 and a Kitty terminal (`kitten` must be on `PATH`) for cover rendering.
+
+Docstrings in `misflix/` follow the Google convention (summary line, then `Args:`/
+`Returns:`/`Raises:`/`Attributes:` sections as applicable) — enforced by `ruff`'s `D`
+rules (`[tool.ruff.lint.pydocstyle]`, `convention = "google"`). Missing docstrings on
+private one-liners are not flagged on purpose (`D100`-`D107` are ignored): the
+convention is that an existing docstring must be Google-shaped, not that every
+function needs one.
+
+## Pre-push validation
+
+`.githooks/pre-push` runs `ruff check`, `ruff format --check`, `mypy`, and `pytest`
+before every `git push`, aborting the push if any of them fail. Git doesn't read hooks
+from `.githooks/` on its own — this repo's local config already points
+`core.hooksPath` there, but a fresh clone needs to opt in once:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Architecture
 
@@ -140,23 +161,30 @@ services, or UI:
     real Mediafire filenames already contain it, e.g. `RCKYMRTS01E01_ZL.rar`), falling
     back to the url's position in the pasted list when a url has no such code.
 - **`misflix/core/`** — framework-agnostic domain layer. `models.py` defines `MediaKind`
-  (`MOVIE`/`SERIES`/`BOOK`), `Media`, and `DownloadOption` (the latter has an
+  (`MOVIE`/`SERIES`/`BOOK`), `Media`, `DownloadOption` (the latter has an
   `opens_externally` flag for sources whose download must be finished by hand in a
-  browser). `ports.py` defines `Protocol`s (`SourceProvider`, `Downloader`,
-  `CoverRenderer`) — `SourceProvider` only requires `search`/`get_media`/
-  `get_download_options`; the series-only methods (`get_seasons`, `get_episodes`,
-  `get_season_download_options`) are optional and probed with `getattr` in
-  `download.py`, since a movie-only provider will never have them. `kinds` (a
-  `set[MediaKind]`, e.g. `zona_leros.ZonaLerosProvider.kinds = {MOVIE, SERIES}`,
-  `lectulandia.LectulandiaProvider.kinds = {BOOK}`) is optional too, probed the same
-  way — `SearchService.search` uses it to skip querying a provider *before* calling
-  it at all when none of its declared kinds match what's being searched for. This
-  was a real bug, not just an optimization: without it, `search books "..."` (no
-  explicit `source`) iterated every registered provider including zona-leros, so a
-  books-only search still tripped zona-leros's Cloudflare Turnstile (opened the
-  browser) even though its results would've been filtered out afterward anyway by
-  `Media.kind`. A provider that doesn't declare `kinds` (or a test double) is still
-  queried unconditionally, same as before this existed.
+  browser), and `MOVIE_KINDS`/`BOOK_KINDS` (the `frozenset[MediaKind]` pairs that back
+  the `movies`/`books` split in both `cli/search.py` and `cli/download.py` — kept in one
+  place instead of redefined per CLI module). `ports.py` defines the `Protocol`s:
+  `SourceProvider` (`search`/`get_media`/`get_download_options` — every provider),
+  `SeriesProvider` (extends `SourceProvider` with `get_seasons`/`get_episodes`/
+  `get_season_download_options`; `@runtime_checkable`, so `cli/download.py` narrows to
+  it with `isinstance(provider, SeriesProvider)` instead of `getattr`-probing each
+  method by name), and `Downloader` (the `download(url, dest_path, on_progress)`
+  contract `DownloadService` is typed against, instead of the concrete
+  `HttpxDownloader`, so the service layer depends on an abstraction rather than a
+  specific implementation). `kinds` (a `set[MediaKind]`, e.g.
+  `zona_leros.ZonaLerosProvider.kinds = {MOVIE, SERIES}`,
+  `lectulandia.LectulandiaProvider.kinds = {BOOK}`) is a plain optional attribute, not
+  part of any `Protocol` — still probed with `getattr` in `SearchService.search`, which
+  uses it to skip querying a provider *before* calling it at all when none of its
+  declared kinds match what's being searched for. This was a real bug, not just an
+  optimization: without it, `search books "..."` (no explicit `source`) iterated every
+  registered provider including zona-leros, so a books-only search still tripped
+  zona-leros's Cloudflare Turnstile (opened the browser) even though its results
+  would've been filtered out afterward anyway by `Media.kind`. A provider that doesn't
+  declare `kinds` (or a test double) is still queried unconditionally, same as before
+  this existed.
   `download_service.py` handles: a single streamed download (`DownloadService.download`,
   with an optional `filename_stem` override used by the batch flows below); movie-only
   `resolve_folder_name` (Plex-style `Titulo (anio)` via IMDb; falls back to the raw
@@ -185,10 +213,14 @@ services, or UI:
   `tests/test_search_service.py`, `tests/test_download_service.py` for the fake-object
   pattern used to keep these testable without network access.
 - **`misflix/providers/`** — one module per scraped repo, each implementing
-  `SourceProvider` (`search`, `get_media`, `get_download_options`, plus the optional
-  season/episode methods for series sources). `base.py`'s `StaticProvider` is the only
-  base left (httpx + BeautifulSoup, for plain HTML sites; the old Playwright-based
-  `DynamicProvider` was removed — see the Cloudflare note below). New sources register
+  `SourceProvider` (`search`, `get_media`, `get_download_options`, plus `SeriesProvider`'s
+  season/episode methods for series sources — see `core/ports.py`). `base.py`'s
+  `StaticProvider` is the only base left (httpx + BeautifulSoup, for plain HTML sites;
+  the old Playwright-based `DynamicProvider` was removed — see the Cloudflare note
+  below); its `http` attribute is typed against `base.HttpGetClient`, a small structural
+  `Protocol` (just `get(url) -> <something with .text>`) rather than the concrete
+  `HttpClient`, so `ZonaLerosProvider` can hand it a `CloudflareHttpClient` instead
+  (different class, same shape) without a type mismatch. New sources register
   themselves in `registry.py`.
   - **`zona_leros.py`** — the one real provider so far, covering both movies and
     series. The site sits behind a Cloudflare Managed Challenge (interactive Turnstile)
@@ -237,7 +269,15 @@ services, or UI:
     every option comes back with `opens_externally=False` since none of this needs
     a browser or manual captcha-solving.
 - **`misflix/infra/`** — technical details behind the ports:
-  - `http_client.py` — plain httpx wrapper for sites with no bot protection.
+  - `http_client.py` — plain httpx wrapper for sites with no bot protection. Also holds
+    `DEFAULT_HEADERS` (the shared User-Agent), imported by `imdb.py`, `antupload.py`,
+    and `mediafire.py` instead of each redefining the same dict.
+  - `soup.py` — one helper, `attr(tag, name)`: BeautifulSoup's stubs type every
+    attribute as `str | list[str]` (an HTML attribute can in theory be multi-valued,
+    like `class`), but every attribute this project reads (`href`, `src`, `style`,
+    `value`) is always a single string in practice. Used everywhere a provider does
+    `tag["href"]` instead of indexing the tag directly, so that stays true for the
+    type checker too.
   - `cloudflare.py` (`CloudflareHttpClient`) — reuses the `cf_clearance` cookie from a
     real Firefox-based browser profile (see `browser_cookies.py`) and replays requests
     with `curl_cffi` impersonating a real browser's TLS fingerprint (plain httpx/OpenSSL
@@ -287,7 +327,9 @@ services, or UI:
   - `downloader.py` — streaming download with a progress callback; wraps any
     `httpx.HTTPError` (dead link, connection cut mid-stream, etc.) into `DownloadError`
     and deletes whatever partial file it had written before re-raising.
-  - `filesystem.py` — filename sanitizing, dir creation.
+  - `filesystem.py` — filename sanitizing, dir creation, and `part_number` (extracts the
+    `partN` number from a filename or url — shared by `archives.py`, for sorting `.rar`
+    volumes, and `ui/prompts.py`, for sorting pasted links).
 - **`misflix/ui/`** — terminal presentation. `views.py` and `prompts.show_cover` render
   covers via `image_render.CoverRenderer.render_grid`, which lays cards (a `rich`
   renderable + its cover) out in a real grid using Kitty's `--place` placement and

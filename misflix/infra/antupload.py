@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
 from misflix.infra.http_client import DEFAULT_HEADERS
+from misflix.infra.soup import attr
 
 BASE_URL = "https://www.antupload.com"
 
@@ -68,7 +69,7 @@ def download(page_url: str, dest_path: Path, on_progress: ProgressCallback | Non
         button = soup.select_one("a#downloadB[href]")
         if not button:
             raise AntuploadResolveError(f"No se encontro el boton de descarga en {page_url}")
-        direct_url = urljoin(BASE_URL, button["href"])
+        direct_url = urljoin(BASE_URL, attr(button, "href"))
 
         try:
             with client.stream("GET", direct_url, headers={"Referer": page_url}) as stream_response:

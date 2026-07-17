@@ -6,7 +6,7 @@ app = typer.Typer(help="Ver o ajustar la configuracion del CLI.")
 
 
 @app.command("show")
-def show():
+def show() -> None:
     """Muestra la configuracion actual (carpetas de descarga, etc.)."""
     settings = get_settings()
     typer.echo(settings)

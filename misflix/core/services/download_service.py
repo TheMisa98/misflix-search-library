@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from misflix.core.models import DownloadOption, Media, MediaKind
 from misflix.core.ports import Downloader, ProgressCallback

@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from misflix.core.models import DownloadOption, Media, MediaKind
+from misflix.infra.soup import attr
 from misflix.providers.base import StaticProvider
 
 BASE_URL = "https://ww3.lectulandia.com"
@@ -15,9 +16,11 @@ _EXTENSIONS = {"epub": ".epub", "pdf": ".pdf"}
 
 
 class LectulandiaProvider(StaticProvider):
-    """Provider para lectulandia.com (libros, epub/pdf). El sitio esta detras de
-    Cloudflare pero no exige un Turnstile para un GET plano (verificado en vivo,
-    a diferencia de zona-leros): `StaticProvider`/httpx de toda la vida alcanza.
+    """Provider para lectulandia.com (libros, epub/pdf).
+
+    El sitio esta detras de Cloudflare pero no exige un Turnstile para un
+    GET plano (verificado en vivo, a diferencia de zona-leros):
+    `StaticProvider`/httpx de toda la vida alcanza.
 
     Cada boton de descarga de la ficha del libro apunta a `/download.php?...`, una
     pagina que solo existe para mostrar una cuenta regresiva falsa de 11s antes de
@@ -29,7 +32,8 @@ class LectulandiaProvider(StaticProvider):
     `get_download_options` decodifica `d` directamente y arma la url de antupload
     sin pasar por `/download.php` en absoluto. La resolucion final (antupload
     exige una cookie de sesion + Referer encadenados, ver infra/antupload.py) es
-    responsabilidad de `DownloadService.download`, no de este provider."""
+    responsabilidad de `DownloadService.download`, no de este provider.
+    """
 
     name = "lectulandia"
     kinds = {MediaKind.BOOK}
@@ -53,14 +57,15 @@ class LectulandiaProvider(StaticProvider):
                 continue
 
             img = article.select_one("img.cover")
+            href = attr(link, "href")
             results.append(
                 Media(
-                    id=_slug_from_url(link["href"]),
+                    id=_slug_from_url(href),
                     title=link.get_text(strip=True),
                     kind=MediaKind.BOOK,
                     source=self.name,
-                    page_url=urljoin(BASE_URL, link["href"]),
-                    cover_url=img["src"] if img else None,
+                    page_url=urljoin(BASE_URL, href),
+                    cover_url=attr(img, "src") if img else None,
                 )
             )
         return results
@@ -85,7 +90,7 @@ class LectulandiaProvider(StaticProvider):
             kind=MediaKind.BOOK,
             source=self.name,
             page_url=url,
-            cover_url=img["src"] if img else None,
+            cover_url=attr(img, "src") if img else None,
         )
 
     def get_download_options(self, media: Media) -> list[DownloadOption]:
@@ -103,11 +108,11 @@ class LectulandiaProvider(StaticProvider):
         options = []
         for link in soup.select("#downloadContainer a[href]"):
             input_el = link.select_one("input[value]")
-            label = input_el["value"].strip() if input_el else None
+            label = attr(input_el, "value").strip() if input_el else None
             if not label:
                 continue
 
-            link_code = _extract_link_code(link["href"])
+            link_code = _extract_link_code(attr(link, "href"))
             if link_code is None:
                 continue
 
@@ -132,5 +137,5 @@ def _extract_link_code(download_php_href: str) -> str | None:
         return None
     try:
         return base64.b64decode(encoded).decode()
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return None

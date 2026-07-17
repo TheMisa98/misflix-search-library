@@ -12,12 +12,12 @@ from rich.progress import BarColumn, DownloadColumn, Progress, TimeRemainingColu
 from rich.table import Table
 
 from misflix.core.models import DownloadOption, Media
+from misflix.infra.filesystem import part_number
 from misflix.ui.image_render import Card, CoverRenderer, FetchBytes
 
 console = Console()
 
 _URL_RE = re.compile(r"https?://\S+")
-_PART_RE = re.compile(r"[._-]part0*(\d+)", re.IGNORECASE)
 _LABEL_RE = re.compile(r"^(?P<host>\S+)(?:\s*\((?P<quality>.+)\))?$")
 _HOST_COLORS = {"MEGA": "red", "MEDIAFIRE": "blue"}
 _BRACKETED_PASTE_RE = re.compile(r"\x1b\[20[01]~")
@@ -25,12 +25,20 @@ _EPISODE_LABEL_RE = re.compile(r"^(?P<show>.*?)\s*(?P<code>\d+x\d+)$")
 
 
 def show_cover(media: Media, fetch_bytes: FetchBytes | None = None, landscape: bool = False) -> None:
-    """`landscape=True` para la portada de un episodio suelto: a diferencia de una
-    pelicula/serie (poster vertical, ~2:3), zona-leros usa ahi una miniatura tipo
-    screenshot horizontal (~3:2 — verificado contra el sitio real: 307x207 para un
-    episodio vs. 400x570 para una serie). Meter las dos formas en la misma caja
-    vertical le queda mal a una de las dos, asi que la caja de un episodio es mas
-    ancha que alta en vez de al reves."""
+    """Muestra la ficha y portada de `media`.
+
+    Args:
+        media: Media a mostrar.
+        fetch_bytes: Callback para bajar la portada, si el provider la
+            necesita (ver `cli/search.py`/`cli/download.py`).
+        landscape: True para la portada de un episodio suelto: a diferencia
+            de una pelicula/serie (poster vertical, ~2:3), zona-leros usa
+            ahi una miniatura tipo screenshot horizontal (~3:2 — verificado
+            contra el sitio real: 307x207 para un episodio vs. 400x570 para
+            una serie). Meter las dos formas en la misma caja vertical le
+            queda mal a una de las dos, asi que la caja de un episodio es
+            mas ancha que alta en vez de al reves.
+    """
     year = f" ({media.year})" if media.year else ""
     body = f"[bold]{media.title}[/bold]{year}\n[dim]{media.kind.value} · {media.source}[/dim]"
     panel = Panel(body, border_style="cyan", expand=False)
@@ -47,6 +55,14 @@ def show_cover(media: Media, fetch_bytes: FetchBytes | None = None, landscape: b
 
 
 def choose_option(options: list[DownloadOption]) -> DownloadOption:
+    """Muestra `options` en una tabla y pide elegir una.
+
+    Args:
+        options: Opciones de descarga a mostrar.
+
+    Returns:
+        La opcion elegida.
+    """
     table = Table(border_style="cyan", header_style="bold cyan")
     table.add_column("#", justify="right", style="bold", no_wrap=True)
     table.add_column("Servidor")
@@ -66,6 +82,14 @@ def choose_option(options: list[DownloadOption]) -> DownloadOption:
 
 
 def choose_episode(episodes: list[Media]) -> Media:
+    """Muestra `episodes` en una tabla y pide elegir uno.
+
+    Args:
+        episodes: Episodios a mostrar.
+
+    Returns:
+        El episodio elegido.
+    """
     table = Table(title="Episodios", border_style="cyan", header_style="bold cyan")
     table.add_column("#", justify="right", style="bold", no_wrap=True)
     table.add_column("Capitulo", style="magenta", no_wrap=True)
@@ -90,13 +114,24 @@ _SERIES_MODE_LABELS = {
 
 
 def choose_series_mode(seasons_with_packs: list[int]) -> str:
-    """Devuelve 'season_pack', 'all_season_packs', 'season_batch', 'series_batch' o
-    'episode'. `season_pack` (el .rar de una temporada ya armado por el repo) solo se
-    ofrece si `seasons_with_packs` no esta vacia, y `all_season_packs` (todas esas
-    temporadas, una atras de la otra) solo si hay mas de una — con una sola temporada
-    con pack ya es lo mismo que `season_pack`. Las opciones "por episodio" (que
-    descargan uno por uno, ya que estos sitios exigen resolver un captcha nuevo por
-    cada pagina) siempre estan disponibles, sea cual sea el repo."""
+    """Pregunta como descargar una serie.
+
+    `season_pack` (el .rar de una temporada ya armado por el repo) solo se
+    ofrece si `seasons_with_packs` no esta vacia, y `all_season_packs`
+    (todas esas temporadas, una atras de la otra) solo si hay mas de una —
+    con una sola temporada con pack ya es lo mismo que `season_pack`. Las
+    opciones "por episodio" (que descargan uno por uno, ya que estos sitios
+    exigen resolver un captcha nuevo por cada pagina) siempre estan
+    disponibles, sea cual sea el repo.
+
+    Args:
+        seasons_with_packs: Numeros de temporada que tienen un pack
+            completo (ver `SeriesProvider.get_seasons`).
+
+    Returns:
+        Uno de `'season_pack'`, `'all_season_packs'`, `'season_batch'`,
+        `'series_batch'` o `'episode'`.
+    """
     modes = []
     if seasons_with_packs:
         modes.append("season_pack")
@@ -115,10 +150,19 @@ def choose_series_mode(seasons_with_packs: list[int]) -> str:
 
 
 def confirm_batch_download(count: int, unit: str = "episodios") -> bool:
-    """Se pregunta una unica vez antes de arrancar un lote (de episodios o de
-    temporadas): el Turnstile del ad-locker es fresco por pagina, asi que cada uno
-    va a necesitar su propio paso manual en el navegador (abrir, resolver, pegar
-    links) — pero no hace falta reconfirmar eso en cada elemento del lote."""
+    """Pregunta, una unica vez, si arrancar un lote de `count` items.
+
+    El Turnstile del ad-locker es fresco por pagina, asi que cada item va a
+    necesitar su propio paso manual en el navegador (abrir, resolver, pegar
+    links) — pero no hace falta reconfirmar eso en cada elemento del lote.
+
+    Args:
+        count: Cantidad de items a procesar.
+        unit: Sustantivo a mostrar (ej. "episodios", "temporadas").
+
+    Returns:
+        True si el usuario confirmo arrancar.
+    """
     console.print(
         Panel(
             f"Se van a procesar {count} {unit}, uno por uno.\n"
@@ -133,14 +177,30 @@ def confirm_batch_download(count: int, unit: str = "episodios") -> bool:
 
 
 def option_host(option: DownloadOption) -> str:
-    """Nombre de servidor (MEGA, MEDIAFIRE, ...) sin la calidad entre parentesis,
-    para poder reusar la misma preferencia de servidor entre varios episodios de
-    un lote sin volver a preguntar en cada uno."""
+    """Nombre de servidor de `option`, sin la calidad entre parentesis.
+
+    Permite reusar la misma preferencia de servidor entre varios episodios
+    de un lote sin volver a preguntar en cada uno.
+
+    Args:
+        option: Opcion cuya etiqueta (ej. "MEGA (1080p)") inspeccionar.
+
+    Returns:
+        El nombre de servidor en mayusculas, ej. "MEGA".
+    """
     match = _LABEL_RE.match(option.label)
     return (match.group("host") if match else option.label).upper()
 
 
 def choose_season(seasons: list[int]) -> int:
+    """Muestra `seasons` en una tabla y pide elegir una.
+
+    Args:
+        seasons: Numeros de temporada a mostrar.
+
+    Returns:
+        El numero de temporada elegido.
+    """
     table = Table(title="Temporadas disponibles", border_style="cyan", header_style="bold cyan")
     table.add_column("#", justify="right", style="bold", no_wrap=True)
     table.add_column("Temporada", style="magenta")
@@ -153,6 +213,15 @@ def choose_season(seasons: list[int]) -> int:
 
 
 def _prompt_choice(label: str, count: int) -> int:
+    """Pide un numero entre 1 y `count`, reintentando hasta que sea valido.
+
+    Args:
+        label: Texto del prompt.
+        count: Cantidad de opciones disponibles.
+
+    Returns:
+        El numero elegido (1-based).
+    """
     while True:
         raw = console.input(f"[bold cyan]{label} (1-{count}) ›[/bold cyan] ")
         if raw.strip().isdigit() and 1 <= int(raw.strip()) <= count:
@@ -161,6 +230,14 @@ def _prompt_choice(label: str, count: int) -> int:
 
 
 def _format_size(size_bytes: int | None) -> str:
+    """Formatea un tamaño en bytes de forma legible (ej. "1.2 GB").
+
+    Args:
+        size_bytes: Tamaño en bytes, o None si se desconoce.
+
+    Returns:
+        El tamaño formateado, o "-" si `size_bytes` es None.
+    """
     if size_bytes is None:
         return "-"
     size = float(size_bytes)
@@ -172,12 +249,31 @@ def _format_size(size_bytes: int | None) -> str:
 
 
 def confirm_download(media: Media, option: DownloadOption, dest_dir: Path) -> bool:
+    """Pide confirmar la descarga directa de `option`.
+
+    Args:
+        media: Media al que pertenece la opcion.
+        option: Opcion a descargar.
+        dest_dir: Carpeta destino a mostrar.
+
+    Returns:
+        True si el usuario confirmo.
+    """
     body = f"[bold]{media.title}[/bold] · {option.label}\n[dim]destino: {dest_dir}[/dim]"
     console.print(Panel(body, title="Confirmar descarga", border_style="cyan", expand=False))
     return typer.confirm("Confirmar?")
 
 
 def confirm_open_externally(media: Media, option: DownloadOption) -> bool:
+    """Pide confirmar abrir `option` en el navegador para resolverla a mano.
+
+    Args:
+        media: Media al que pertenece la opcion.
+        option: Opcion `opens_externally` a abrir.
+
+    Returns:
+        True si el usuario confirmo.
+    """
     body = (
         f"[bold]{media.title}[/bold] · {option.label}\n"
         "[dim]Se abrira en tu navegador para que completes la verificacion y "
@@ -188,11 +284,16 @@ def confirm_open_externally(media: Media, option: DownloadOption) -> bool:
 
 
 def _read_buffered_line() -> str | None:
-    """Linea ya lista para leer en stdin sin bloquear, o None si no hay ninguna
-    esperando todavia. `select` sobre una terminal en modo canonico devuelve
-    "listo" recien cuando el driver de la tty ya tiene una linea completa en su
-    cola — asi que esto detecta exactamente las lineas que llegaron pegadas junto
-    con la anterior, sin arriesgarse a bloquear leyendo de mas."""
+    """Lee una linea de stdin solo si ya esta lista, sin bloquear.
+
+    `select` sobre una terminal en modo canonico devuelve "listo" recien
+    cuando el driver de la tty ya tiene una linea completa en su cola — asi
+    que esto detecta exactamente las lineas que llegaron pegadas junto con
+    la anterior, sin arriesgarse a bloquear leyendo de mas.
+
+    Returns:
+        La linea leida, o None si no hay ninguna esperando todavia.
+    """
     if not sys.stdin.isatty():
         return None
     ready, _, _ = select.select([sys.stdin], [], [], 0)
@@ -200,10 +301,17 @@ def _read_buffered_line() -> str | None:
 
 
 def collect_direct_links() -> list[str]:
-    """Pide los links finales que el usuario obtuvo en el navegador tras resolver el
-    checkbox de Cloudflare y el captcha del acortador. Se puede pegar todo de una
-    (varias lineas en un solo paste); los links se extraen y ordenan solos por el
-    numero de parte en el nombre de archivo (partN), si lo tienen."""
+    """Pide los links finales resueltos a mano en el navegador.
+
+    Se puede pegar todo de una (varias lineas en un solo paste); los links
+    se extraen y ordenan solos por el numero de parte en el nombre de
+    archivo (`partN`), si lo tienen.
+
+    Returns:
+        Los links detectados, en orden de parte (los que no traen numero de
+        parte van al final, en el orden en que se pegaron). Vacio si no se
+        detecto ningun link valido.
+    """
     console.print(
         Panel(
             "Volve al navegador, completa la verificacion y copia los links de descarga "
@@ -247,10 +355,6 @@ def collect_direct_links() -> list[str]:
             seen.add(url)
             urls.append(url)
 
-    def part_number(url: str) -> int | None:
-        match = _PART_RE.search(url)
-        return int(match.group(1)) if match else None
-
     urls.sort(key=lambda u: (part_number(u) is None, part_number(u) or 0))
 
     if not urls:
@@ -269,7 +373,11 @@ def collect_direct_links() -> list[str]:
 
 
 def progress_bar() -> Progress:
-    """Progress de rich para mostrar el avance de cada parte de una descarga secuencial."""
+    """Crea una barra de progreso de rich para una descarga (o secuencia de partes).
+
+    Returns:
+        Un `Progress` listo para usar como context manager.
+    """
     return Progress(
         "[progress.description]{task.description}",
         BarColumn(),

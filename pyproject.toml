@@ -20,6 +20,8 @@ misflix = "misflix.cli.app:app"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
 ]
 
 [build-system]
@@ -28,3 +30,30 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["misflix"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+# D: exige que los docstrings existentes sigan el formato Google (secciones,
+# puntuacion, etc.) sin forzar que TODO tenga uno — los D1xx ("falta
+# docstring") quedan afuera a proposito, porque el proyecto documenta helpers
+# privados triviales sin docstring de forma consistente.
+select = ["E", "F", "I", "UP", "B", "D"]
+ignore = ["D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests documentan el "por que" de cada caso en el nombre del test mismo
+# (convencion ya usada en todo tests/); no se les exige formato Google.
+"tests/*" = ["D"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["misflix"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
