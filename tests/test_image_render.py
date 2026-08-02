@@ -67,3 +67,57 @@ def test_render_grid_falls_back_to_stacked_without_a_cursor_position(monkeypatch
     rendered = CoverRenderer().render_grid(cards, columns=2)
 
     assert rendered == 3
+
+
+def test_center_col_centers_within_the_terminal_width():
+    assert image_render._center_col(width=10, term_cols=100) == 46
+
+
+def test_center_col_pins_to_the_left_when_wider_than_the_terminal():
+    assert image_render._center_col(width=100, term_cols=10) == 1
+
+
+def test_center_col_pins_to_the_left_without_a_known_terminal_width():
+    assert image_render._center_col(width=10, term_cols=None) == 1
+
+
+class FakeStdout:
+    def __init__(self):
+        self.written: list[str] = []
+
+    def write(self, s: str) -> None:
+        self.written.append(s)
+
+    def flush(self) -> None:
+        pass
+
+
+def test_render_grid_centers_a_single_card_when_centered(monkeypatch):
+    monkeypatch.setattr(image_render.shutil, "which", lambda name: "/usr/bin/kitten")
+    monkeypatch.setattr(image_render, "_ensure_fresh_top", lambda: (1, 1))
+    monkeypatch.setattr(image_render, "_terminal_rows", lambda: 200)
+    monkeypatch.setattr(image_render, "_terminal_cols", lambda: 100)
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(image_render.sys, "stdout", fake_stdout)
+
+    card = make_card("Hola")
+    CoverRenderer().render_grid([card], columns=1, centered=True)
+
+    lines = image_render._render_lines(card.renderable, 36)
+    panel_width = max(len(image_render._ANSI_RE.sub("", line)) for line in lines)
+    expected_col = image_render._center_col(panel_width, 100)
+
+    assert fake_stdout.written[0].startswith(f"\x1b[1;{expected_col}H")
+
+
+def test_render_grid_does_not_center_by_default(monkeypatch):
+    monkeypatch.setattr(image_render.shutil, "which", lambda name: "/usr/bin/kitten")
+    monkeypatch.setattr(image_render, "_ensure_fresh_top", lambda: (1, 1))
+    monkeypatch.setattr(image_render, "_terminal_rows", lambda: 200)
+    monkeypatch.setattr(image_render, "_terminal_cols", lambda: 100)
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(image_render.sys, "stdout", fake_stdout)
+
+    CoverRenderer().render_grid([make_card("Hola")], columns=1)
+
+    assert fake_stdout.written[0].startswith("\x1b[1;1H")

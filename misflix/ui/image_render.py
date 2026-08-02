@@ -101,6 +101,34 @@ def _terminal_rows() -> int | None:
         return None
 
 
+def _terminal_cols() -> int | None:
+    """Ancho de la terminal actual, en columnas.
+
+    Returns:
+        La cantidad de columnas, o None si no se pudo determinar (sin tty).
+    """
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return None
+
+
+def _center_col(width: int, term_cols: int | None) -> int:
+    """Columna (1-indexed) donde arrancar para centrar algo de `width` celdas.
+
+    Args:
+        width: Ancho, en celdas, de lo que se quiere centrar.
+        term_cols: Ancho de la terminal, o None si no se pudo determinar (en
+            ese caso no hay como centrar, se pega a la izquierda).
+
+    Returns:
+        La columna 1-indexed donde arrancar a dibujar.
+    """
+    if term_cols is None or term_cols <= width:
+        return 1
+    return (term_cols - width) // 2 + 1
+
+
 def _ensure_fresh_top() -> tuple[int, int] | None:
     """Scrollea todo el contenido previo fuera de pantalla y arranca en la fila 1.
 
@@ -144,6 +172,7 @@ class CoverRenderer:
         image_height: int = 16,
         col_gap: int = 3,
         row_gap: int = 2,
+        centered: bool = False,
     ) -> int:
         """Dibuja `cards` en una grilla de `columns` por fila.
 
@@ -172,6 +201,15 @@ class CoverRenderer:
             image_height: Alto en celdas de cada portada.
             col_gap: Separacion horizontal entre columnas.
             row_gap: Separacion vertical entre filas.
+            centered: True para centrar cada card en el ancho de la
+                terminal en vez de pegarla a la izquierda — pensado para
+                `columns=1` (la ficha de un solo resultado, ver
+                `prompts.show_cover`); con mas de una columna cada card se
+                centra por separado, lo que no da una grilla prolija. El
+                texto y la portada de una misma card se centran cada uno
+                por su cuenta segun su propio ancho (el panel de texto
+                puede ser mas angosto que `image_width`, o viceversa), no
+                comparten columna como en el caso sin centrar.
 
         Returns:
             Cuantas cards se llegaron a dibujar (puede ser menos que
@@ -193,6 +231,7 @@ class CoverRenderer:
 
         row_cursor, start_col = start
         term_rows = _terminal_rows()
+        term_cols = _terminal_cols() if centered else None
         rendered = 0
 
         for row_index, row in enumerate(rows):
@@ -203,7 +242,11 @@ class CoverRenderer:
                 break
 
             for j, (_card, lines) in enumerate(row):
-                col = start_col + j * (card_width + col_gap)
+                if centered:
+                    panel_width = max((len(_ANSI_RE.sub("", line)) for line in lines), default=0)
+                    col = _center_col(panel_width, term_cols)
+                else:
+                    col = start_col + j * (card_width + col_gap)
                 for offset, line in enumerate(lines):
                     sys.stdout.write(f"\x1b[{row_cursor + offset};{col}H{line}")
             sys.stdout.flush()
@@ -212,7 +255,7 @@ class CoverRenderer:
             for j, (card, _lines) in enumerate(row):
                 if not card.cover_url:
                     continue
-                col = start_col + j * (card_width + col_gap)
+                col = _center_col(image_width, term_cols) if centered else start_col + j * (card_width + col_gap)
                 place = f"{image_width}x{image_height}@{col - 1}x{image_row - 1}"
                 self._safe_icat(["--place", place], card.cover_url, card.fetch_bytes)
 

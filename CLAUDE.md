@@ -8,7 +8,14 @@ Responder siempre en español al usuario en este repo, sin importar el idioma de
 
 ## Commit convention
 
-Never add `Co-Authored-By: Claude` (or any variant) to git commit messages in this repo.
+- Summary line: imperative mood, no trailing period (e.g. `Document architecture and
+  commands in CLAUDE.md`, `Scaffold CLI architecture with layered providers and add
+  initial test suite`). Says *what* changed, kept short enough to read in `git log
+  --oneline`.
+- Blank line, then a body explaining *why* — the motivation/context, not a restatement
+  of the diff. For a commit that touches several unrelated things, break the body into
+  `- ` bullets (one per concern) instead of one big paragraph.
+- Never add `Co-Authored-By: Claude` (or any variant).
 
 ## Commands
 

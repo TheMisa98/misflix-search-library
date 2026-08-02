@@ -239,7 +239,11 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
     ese caso `_download_series` se hace cargo de elegir que bajar (pack de
     temporada, episodio suelto, o en lote) y de todo el resto por su cuenta;
     lo que sigue en esta funcion es entonces solo el camino de
-    pelicula/libro.
+    pelicula/libro. Para un libro, elegir el formato (epub/pdf) ya es la
+    unica decision que hay que tomar (no hay servidor/calidad para elegir,
+    ni carpeta destino que configurar — siempre es `settings.books_dir`), asi
+    que no se repite esa eleccion como una confirmacion aparte: se avisa
+    donde va a quedar y se descarga directo (ver `prompts.choose_option`).
 
     Args:
         provider: Provider que resolvio `media`.
@@ -254,7 +258,7 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
         _download_series(provider, media, fetch_bytes)
         return
 
-    option = prompts.choose_option(options)
+    option = prompts.choose_option(options, kind=media.kind)
 
     settings = get_settings()
     if media.kind == MediaKind.MOVIE:
@@ -315,7 +319,9 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
             prompts.console.print(f"[green]Listo:[/green] {video_path}")
         return
 
-    if not prompts.confirm_download(media, option, dest_dir):
+    if media.kind == MediaKind.BOOK:
+        prompts.console.print(f"[dim]Descargando en {dest_dir}[/dim]")
+    elif not prompts.confirm_download(media, option, dest_dir):
         return
 
     def try_download() -> Path | None:

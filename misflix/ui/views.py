@@ -46,8 +46,10 @@ def show_results(results: list[Media], fetcher_for: FetcherFor | None = None, st
     for offset, media in enumerate(results[start:]):
         i = start + offset + 1
         year = f" ({media.year})" if media.year else ""
+        author = f"[dim]{media.author}[/dim]\n" if media.author else ""
         body = (
             f"[bold]{media.title}[/bold]{year}\n"
+            f"{author}"
             f"[dim]{media.kind.value} · {media.source}[/dim]\n"
             f"[dim]id: {media.id}[/dim]"
         )

@@ -59,6 +59,10 @@ class Media:
         page_url: URL de la ficha en el sitio de origen.
         cover_url: URL de la portada, si el provider la expone.
         year: Año de estreno/publicacion, si se pudo scrapear.
+        author: Autor(es), si el provider los expone (tipicamente libros;
+            varios autores van juntos en un solo string, ej. "Brian Herbert,
+            Frank Herbert").
+        synopsis: Resumen/sinopsis, si el provider lo expone.
         extra: Datos adicionales especificos de un provider, sin uso generico.
     """
 
@@ -69,4 +73,6 @@ class Media:
     page_url: str
     cover_url: str | None = None
     year: int | None = None
+    author: str | None = None
+    synopsis: str | None = None
     extra: dict = field(default_factory=dict)

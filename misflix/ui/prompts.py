@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, DownloadColumn, Progress, TimeRemainingColumn, TransferSpeedColumn
 from rich.table import Table
 
-from misflix.core.models import DownloadOption, Media
+from misflix.core.models import DownloadOption, Media, MediaKind
 from misflix.infra.filesystem import part_number
 from misflix.ui.image_render import Card, CoverRenderer, FetchBytes
 
@@ -27,6 +27,26 @@ _EPISODE_LABEL_RE = re.compile(r"^(?P<show>.*?)\s*(?P<code>\d+x\d+)$")
 def show_cover(media: Media, fetch_bytes: FetchBytes | None = None, landscape: bool = False) -> None:
     """Muestra la ficha y portada de `media`.
 
+    El titulo va en el borde del panel (`title=`, centrado — el mismo estilo
+    que el panel de sinopsis, mas abajo) en vez de como primera linea del
+    cuerpo. La sinopsis (si la hay) se imprime aparte, despues de la
+    portada, en vez de ir dentro del panel que ancla la imagen: ese panel
+    necesita un ancho fijo para que `render_grid` pueda calcular en que fila
+    poner la portada (ver su docstring — la imagen queda clavada a esa fila,
+    no hace scroll como el texto), asi que una sinopsis larga ahi adentro se
+    envuelve en muchas lineas angostas y empuja la imagen mucho mas abajo de
+    lo que en verdad hace falta, a veces mas alla de lo que entra en
+    pantalla (verificado en vivo: la portada terminaba mal ubicada).
+    Imprimirla despues, a todo el ancho de la consola, evita ese
+    acoplamiento del todo. Panel y portada van centrados en el ancho de la
+    terminal (`centered=True`, ver `render_grid`) en vez de pegados al
+    margen izquierdo, ya que aca siempre es una unica card — y ese ancho fijo
+    se calcula a partir de la terminal real (`console.size.width`) en vez de
+    usar el `card_width` angosto pensado para la grilla de 2 columnas de
+    `views.show_results`: con ese angosto, un titulo largo quedaba cortado a
+    la mitad en el borde del panel en vez de envolverse o mostrarse entero
+    (verificado en vivo).
+
     Args:
         media: Media a mostrar.
         fetch_bytes: Callback para bajar la portada, si el provider la
@@ -39,30 +59,54 @@ def show_cover(media: Media, fetch_bytes: FetchBytes | None = None, landscape: b
             queda mal a una de las dos, asi que la caja de un episodio es
             mas ancha que alta en vez de al reves.
     """
-    year = f" ({media.year})" if media.year else ""
-    body = f"[bold]{media.title}[/bold]{year}\n[dim]{media.kind.value} · {media.source}[/dim]"
-    panel = Panel(body, border_style="cyan", expand=False)
+    title = f"{media.title} ({media.year})" if media.year else media.title
+    body = f"[dim]{media.author}[/dim]\n" if media.author else ""
+    body += f"[dim]{media.kind.value} · {media.source}[/dim]"
+    panel = Panel(body, title=title, border_style="cyan", expand=False)
+    card_width = max(20, console.size.width - 4)
 
     if not media.cover_url:
-        console.print(panel)
-        return
-
-    card = Card(panel, media.cover_url, fetch_bytes)
-    if landscape:
-        CoverRenderer().render_grid([card], columns=1, image_width=32, image_height=10)
+        console.print(panel, justify="center")
     else:
-        CoverRenderer().render_grid([card], columns=1)
+        card = Card(panel, media.cover_url, fetch_bytes)
+        if landscape:
+            CoverRenderer().render_grid(
+                [card], columns=1, card_width=card_width, image_width=32, image_height=10, centered=True
+            )
+        else:
+            CoverRenderer().render_grid([card], columns=1, card_width=card_width, centered=True)
+
+    if media.synopsis:
+        console.print(Panel(media.synopsis, title="Sinopsis", border_style="cyan", expand=False), justify="center")
 
 
-def choose_option(options: list[DownloadOption]) -> DownloadOption:
+def choose_option(options: list[DownloadOption], kind: MediaKind | None = None) -> DownloadOption:
     """Muestra `options` en una tabla y pide elegir una.
+
+    Un libro no tiene servidor/calidad/tamaño que mostrar (lectulandia solo
+    ofrece un formato por boton, ya resuelto a antupload — ver
+    `providers/lectulandia.py`), asi que para `MediaKind.BOOK` la tabla se
+    reduce a "#"/"Formato" en vez de reusar las columnas pensadas para
+    pelicula/serie.
 
     Args:
         options: Opciones de descarga a mostrar.
+        kind: Tipo de media al que pertenecen `options`, para elegir el
+            formato de tabla. None (peliculas/series, el caso de siempre)
+            usa la tabla con servidor/calidad/tamaño.
 
     Returns:
         La opcion elegida.
     """
+    if kind == MediaKind.BOOK:
+        table = Table(border_style="cyan", header_style="bold cyan")
+        table.add_column("#", justify="right", style="bold", no_wrap=True)
+        table.add_column("Formato")
+        for i, option in enumerate(options, start=1):
+            table.add_row(str(i), option.label)
+        console.print(table)
+        return options[_prompt_choice("Elegi un formato", len(options)) - 1]
+
     table = Table(border_style="cyan", header_style="bold cyan")
     table.add_column("#", justify="right", style="bold", no_wrap=True)
     table.add_column("Servidor")
