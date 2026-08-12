@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import time
+import typing
 
 from curl_cffi import BrowserTypeLiteral
 from curl_cffi import requests as curl_requests
@@ -8,9 +10,45 @@ from curl_cffi.requests import Response
 
 from misflix.infra.browser_cookies import load_domain_cookies
 from misflix.infra.browser_launch import open_in_browser
+from misflix.infra.browser_version import detect_firefox_major_version
 
-DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"
-DEFAULT_IMPERSONATE: BrowserTypeLiteral = "firefox135"
+# Cloudflare ata la cookie `cf_clearance` al User-Agent EXACTO que resolvio el
+# desafio, no a la huella TLS (verificado en vivo, ver docs/DECISIONS.md 2026-08-12):
+# un cf_clearance valido para el Zen real (rv:153.0) seguia siendo desafiado via
+# curl_cffi con un User-Agent de una version distinta, sin importar que tan reciente
+# fuera el perfil de impersonate usado. Por eso el User-Agent se detecta en vivo
+# contra la instalacion real (`browser_version.py`) en vez de pinearse a mano; el
+# perfil de impersonate en cambio no necesita coincidir con esa version (la huella
+# TLS de curl_cffi nunca replica al navegador real de todas formas) y simplemente usa
+# el `firefoxNNN` mas nuevo que traiga la version instalada de curl_cffi.
+_FALLBACK_FIREFOX_VERSION = "147"
+
+
+def _newest_firefox_impersonate() -> BrowserTypeLiteral:
+    """El perfil de impersonate `firefoxNNN` mas nuevo que trae `curl_cffi`.
+
+    Returns:
+        El perfil de Firefox mas nuevo disponible, para no quedar pineado a mano cada
+        vez que `curl_cffi` agrega perfiles nuevos.
+    """
+    profiles = [p for p in typing.get_args(BrowserTypeLiteral) if re.fullmatch(r"firefox\d+", p)]
+    newest = max(profiles, key=lambda p: int(p.removeprefix("firefox")))
+    return typing.cast(BrowserTypeLiteral, newest)
+
+
+def _default_user_agent() -> str:
+    """User-Agent a juego con el Zen/Firefox real instalado.
+
+    Returns:
+        El User-Agent con la version mayor real detectada, o con
+        `_FALLBACK_FIREFOX_VERSION` si no se pudo detectar la instalacion.
+    """
+    version = detect_firefox_major_version() or _FALLBACK_FIREFOX_VERSION
+    return f"Mozilla/5.0 (X11; Linux x86_64; rv:{version}.0) Gecko/20100101 Firefox/{version}.0"
+
+
+DEFAULT_USER_AGENT = _default_user_agent()
+DEFAULT_IMPERSONATE: BrowserTypeLiteral = _newest_firefox_impersonate()
 
 
 class CloudflareBlockedError(RuntimeError):

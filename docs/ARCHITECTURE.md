@@ -270,6 +270,28 @@ services, or UI:
     URL (see the ad-locker note above) — same one-shot request, but returns `None` on a
     challenge instead of ever opening a browser, so callers can safely try it before
     deciding whether the manual step is actually needed.
+    `DEFAULT_USER_AGENT` is built at import time from `browser_version.py` instead of
+    being pinned to a hardcoded string. Verified live (2026-08-12): Cloudflare ties
+    `cf_clearance` to the *exact* User-Agent string that solved the challenge, not to
+    the TLS fingerprint. With Zen auto-updated to real Firefox 153 and
+    `DEFAULT_USER_AGENT` pinned at a stale `Firefox/152.0`/`Firefox/147.0`, every
+    `curl_cffi` request kept getting `cf-mitigated: challenge` — even seconds after a
+    genuine manual solve, even with the site's own valid session cookies, even though
+    the real browser loaded the same page with zero friction at that exact moment.
+    First suspected the TLS impersonation profile itself (tried every `firefoxNNN`/
+    `chromeNNN` profile `curl_cffi` ships, all failed identically) before finding, via
+    web research into `curl_cffi`/Cloudflare bypass reports, that `cf_clearance` is
+    commonly bound to IP *and User-Agent*, not the TLS handshake. Confirmed instantly:
+    keeping `impersonate` at any reasonable profile but setting the `User-Agent`
+    header to the real browser's exact string (`Firefox/153.0`) went straight from
+    403 to 200. So `browser_version.detect_firefox_major_version` reads the real
+    installed version from Zen/Firefox's `platform.ini` (`Milestone=`) at request
+    time — this has to track the real browser, which auto-updates on its own, so
+    hardcoding it (as the first, wrong fix attempt here did) breaks again on the next
+    Zen update. `DEFAULT_IMPERSONATE`, by contrast, does *not* need to match that
+    version — `_newest_firefox_impersonate` just takes whatever's newest in the
+    installed `curl_cffi`, since the TLS profile turned out not to be what Cloudflare
+    was checking here.
   - `browser_cookies.py` — reads `cf_clearance` (and friends) straight out of the
     Firefox/Zen `cookies.sqlite` for a given domain, copying the db first since the
     browser holds it locked.
