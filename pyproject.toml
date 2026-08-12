@@ -3,6 +3,7 @@ name = "misflix-search"
 version = "0.1.0"
 description = "CLI interactivo para buscar y descargar peliculas, series y libros desde repos no oficiales, con vista previa de portadas en la terminal"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.14"
 authors = [{ name = "Misa", email = "misa.rn9912@gmail.com" }]
 urls.Repository = "https://github.com/TheMisa98/misflix-search-library"
