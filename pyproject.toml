@@ -53,7 +53,7 @@ convention = "google"
 
 [tool.mypy]
 python_version = "3.14"
-files = ["misflix"]
+files = ["misflix", "main.py"]
 warn_unused_ignores = true
 warn_redundant_casts = true
 check_untyped_defs = true
