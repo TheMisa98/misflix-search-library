@@ -7,6 +7,21 @@ decisión del 2026-08-10 en `docs/DECISIONS.md` — antes de esa fecha todo se c
 directo a `master`). Nombre corto, en inglés o español, que describa el cambio
 (`feature/lectulandia-author-pages`, `fix/season-pack-part-detection`).
 
+### Commits chicos en la rama, squash merge a `master`
+
+Mientras se trabaja en la rama, se pushean commits chicos a medida que se avanza —
+son checkpoints del trabajo en curso, no hace falta que cada uno siga la convención
+completa de mensaje (un WIP corto está bien). Sirven como historial de lo que se fue
+haciendo y como respaldo remoto del trabajo en curso.
+
+Cuando el feature/fix está completo, el merge a `master` se hace con **"Squash and
+merge"** en el PR de GitHub (nunca merge normal ni rebase). Recién ahí se escribe el
+commit grande que sí sigue la convención completa (resumen imperativo + cuerpo
+explicando el *por qué*) y que queda como el único commit de ese feature en
+`git log --oneline` de `master`. El historial granular de la rama sigue visible en el
+PR de GitHub aunque la rama se borre después del merge. Ver decisión del 2026-08-12 en
+`docs/DECISIONS.md`.
+
 ## Convención de commits
 
 - Línea de resumen: modo imperativo, sin punto final (ej. `Document architecture and
