@@ -82,3 +82,21 @@ imperativo + cuerpo explicando el *por qué*, ver § Convención de commits). **
 mantener `git log --oneline` en `master` legible (un commit = un feature/fix
 terminado) sin perder la trazabilidad paso a paso del trabajo en curso, que queda en
 el PR.
+
+## 2026-08-12 — Detectar la version real de Firefox/Zen en vez de pinearla a mano en `infra/cloudflare.py`
+
+`CloudflareBlockedError` volvió a aparecer contra zona-leros.com incluso justo
+despues de resolver el checkbox a mano. Diagnostico en vivo (detalle completo en
+`docs/ARCHITECTURE.md` § `infra/cloudflare.py`): Cloudflare ata la cookie
+`cf_clearance` al **User-Agent exacto** que resolvio el desafio, no a la huella TLS
+que imita `curl_cffi`. Zen se autoactualiza (rolling release) y el
+`DEFAULT_USER_AGENT` de este cliente estaba pineado a mano a una version que quedo
+desactualizada. **Motivo de la solucion elegida**: en vez de volver a pinear un
+numero de version nuevo (que se desactualiza de nuevo en la proxima actualizacion de
+Zen — ya paso dos veces en el mismo dia con esta bug), `misflix/infra/browser_version.py`
+lee la version real instalada desde el `platform.ini` del navegador (`Milestone=`) en
+cada corrida del CLI, asi el User-Agent siempre coincide con el navegador que
+realmente resuelve el challenge. El perfil de impersonate de `curl_cffi`
+(`DEFAULT_IMPERSONATE`) no necesita coincidir con esa version — resultó no ser lo que
+Cloudflare estaba chequeando aca — asi que simplemente toma el `firefoxNNN` mas
+nuevo que traiga la version instalada de `curl_cffi`, tambien sin pinear a mano.

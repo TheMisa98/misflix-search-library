@@ -270,34 +270,28 @@ services, or UI:
     URL (see the ad-locker note above) — same one-shot request, but returns `None` on a
     challenge instead of ever opening a browser, so callers can safely try it before
     deciding whether the manual step is actually needed.
-    `DEFAULT_USER_AGENT`/`DEFAULT_IMPERSONATE` need to name the *same* Firefox version
-    as each other — verified live: with Zen auto-updated to 153 and these pinned at
-    152/`firefox135`, the manual verification kept "succeeding" (a newer `cf_clearance`
-    did show up and get picked correctly — `browser_cookies.load_domain_cookies` picks
-    the highest `expiry`, which tracks recency here since this site's clearance
-    duration is constant, so an older cookie sitting in a different Firefox container
-    was never the actual problem) but every subsequent `curl_cffi` request still came
-    back challenged, because the UA claimed one Firefox version while the TLS
-    ClientHello (`impersonate`) looked like a much older one — an inconsistent
-    fingerprint Cloudflare could flag on its own, independent of the cookie's
-    validity. Fixed by bumping both to whatever the newest shared version is (capped by
-    what `curl_cffi` ships — currently `firefox147`, older than the real browser, but
-    self-consistent). This drifts again every time Zen/Firefox ships a version newer
-    than `curl_cffi`'s newest bundled profile — see the comment above the constants for
-    how to re-check and re-pin.
-    **Open issue, not fully resolved** (2026-08-12): even after that fix and bumping
-    `curl-cffi` 0.15.0 → 0.16.0 (newer cookie/header-order WAF-evasion behavior per
-    its changelog, still capped at `firefox147`), a real session — real browser loads
-    zona-leros fine, no challenge shown — still gets `cf-mitigated: challenge` from
-    every `curl_cffi` profile tried (`firefox147`, `firefox144`, `chrome146`,
-    `chrome145`), with or without the valid `cf_clearance`/session cookies, on both
-    `/search` and `/`. Two live hypotheses, not yet distinguished: (a) zona-leros
-    tightened its Cloudflare tier to a fingerprint check (JA3/JA4/HTTP2) no static
-    `curl_cffi` impersonation profile currently defeats, independent of cookie
-    validity; (b) the burst of ~8 back-to-back diagnostic requests made while
-    debugging this tripped Cloudflare's behavioral/rate scoring on this IP, which
-    could self-resolve after a cooldown at normal human-paced usage. Retest at normal
-    pace (not in a tight loop) before concluding (a).
+    `DEFAULT_USER_AGENT` is built at import time from `browser_version.py` instead of
+    being pinned to a hardcoded string. Verified live (2026-08-12): Cloudflare ties
+    `cf_clearance` to the *exact* User-Agent string that solved the challenge, not to
+    the TLS fingerprint. With Zen auto-updated to real Firefox 153 and
+    `DEFAULT_USER_AGENT` pinned at a stale `Firefox/152.0`/`Firefox/147.0`, every
+    `curl_cffi` request kept getting `cf-mitigated: challenge` — even seconds after a
+    genuine manual solve, even with the site's own valid session cookies, even though
+    the real browser loaded the same page with zero friction at that exact moment.
+    First suspected the TLS impersonation profile itself (tried every `firefoxNNN`/
+    `chromeNNN` profile `curl_cffi` ships, all failed identically) before finding, via
+    web research into `curl_cffi`/Cloudflare bypass reports, that `cf_clearance` is
+    commonly bound to IP *and User-Agent*, not the TLS handshake. Confirmed instantly:
+    keeping `impersonate` at any reasonable profile but setting the `User-Agent`
+    header to the real browser's exact string (`Firefox/153.0`) went straight from
+    403 to 200. So `browser_version.detect_firefox_major_version` reads the real
+    installed version from Zen/Firefox's `platform.ini` (`Milestone=`) at request
+    time — this has to track the real browser, which auto-updates on its own, so
+    hardcoding it (as the first, wrong fix attempt here did) breaks again on the next
+    Zen update. `DEFAULT_IMPERSONATE`, by contrast, does *not* need to match that
+    version — `_newest_firefox_impersonate` just takes whatever's newest in the
+    installed `curl_cffi`, since the TLS profile turned out not to be what Cloudflare
+    was checking here.
   - `browser_cookies.py` — reads `cf_clearance` (and friends) straight out of the
     Firefox/Zen `cookies.sqlite` for a given domain, copying the db first since the
     browser holds it locked.

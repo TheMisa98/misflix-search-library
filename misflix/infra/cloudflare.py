@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import time
+import typing
 
 from curl_cffi import BrowserTypeLiteral
 from curl_cffi import requests as curl_requests
@@ -8,18 +10,45 @@ from curl_cffi.requests import Response
 
 from misflix.infra.browser_cookies import load_domain_cookies
 from misflix.infra.browser_launch import open_in_browser
+from misflix.infra.browser_version import detect_firefox_major_version
 
-# El User-Agent y el perfil de impersonate deben referirse a la MISMA version de
-# Firefox entre si (no a la del navegador real del usuario, que curl_cffi no puede
-# imitar mas alla de lo que el paquete trae empaquetado) - un desfasaje entre ambos
-# es una huella inconsistente que Cloudflare puede usar para seguir desafiando pese a
-# una cf_clearance valida. Subir junto con la version mas nueva que traiga
-# curl_cffi (`python -c "from curl_cffi import BrowserTypeLiteral; import typing;
-# print(typing.get_args(BrowserTypeLiteral))"`) cuando Zen/Firefox se adelante
-# demasiado y Cloudflare vuelva a bloquear tras la verificacion manual (verificado en
-# vivo: paso con Zen 153 contra un impersonate/UA pineados en 135/152).
-DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
-DEFAULT_IMPERSONATE: BrowserTypeLiteral = "firefox147"
+# Cloudflare ata la cookie `cf_clearance` al User-Agent EXACTO que resolvio el
+# desafio, no a la huella TLS (verificado en vivo, ver docs/DECISIONS.md 2026-08-12):
+# un cf_clearance valido para el Zen real (rv:153.0) seguia siendo desafiado via
+# curl_cffi con un User-Agent de una version distinta, sin importar que tan reciente
+# fuera el perfil de impersonate usado. Por eso el User-Agent se detecta en vivo
+# contra la instalacion real (`browser_version.py`) en vez de pinearse a mano; el
+# perfil de impersonate en cambio no necesita coincidir con esa version (la huella
+# TLS de curl_cffi nunca replica al navegador real de todas formas) y simplemente usa
+# el `firefoxNNN` mas nuevo que traiga la version instalada de curl_cffi.
+_FALLBACK_FIREFOX_VERSION = "147"
+
+
+def _newest_firefox_impersonate() -> BrowserTypeLiteral:
+    """El perfil de impersonate `firefoxNNN` mas nuevo que trae `curl_cffi`.
+
+    Returns:
+        El perfil de Firefox mas nuevo disponible, para no quedar pineado a mano cada
+        vez que `curl_cffi` agrega perfiles nuevos.
+    """
+    profiles = [p for p in typing.get_args(BrowserTypeLiteral) if re.fullmatch(r"firefox\d+", p)]
+    newest = max(profiles, key=lambda p: int(p.removeprefix("firefox")))
+    return typing.cast(BrowserTypeLiteral, newest)
+
+
+def _default_user_agent() -> str:
+    """User-Agent a juego con el Zen/Firefox real instalado.
+
+    Returns:
+        El User-Agent con la version mayor real detectada, o con
+        `_FALLBACK_FIREFOX_VERSION` si no se pudo detectar la instalacion.
+    """
+    version = detect_firefox_major_version() or _FALLBACK_FIREFOX_VERSION
+    return f"Mozilla/5.0 (X11; Linux x86_64; rv:{version}.0) Gecko/20100101 Firefox/{version}.0"
+
+
+DEFAULT_USER_AGENT = _default_user_agent()
+DEFAULT_IMPERSONATE: BrowserTypeLiteral = _newest_firefox_impersonate()
 
 
 class CloudflareBlockedError(RuntimeError):

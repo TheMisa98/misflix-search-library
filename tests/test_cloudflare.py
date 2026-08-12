@@ -2,16 +2,34 @@ from __future__ import annotations
 
 import re
 
-from misflix.infra.cloudflare import DEFAULT_IMPERSONATE, DEFAULT_USER_AGENT, CloudflareHttpClient
+from misflix.infra.cloudflare import (
+    DEFAULT_IMPERSONATE,
+    DEFAULT_USER_AGENT,
+    CloudflareHttpClient,
+    _default_user_agent,
+    _newest_firefox_impersonate,
+)
 
 
-def test_default_user_agent_and_impersonate_name_the_same_firefox_version():
-    ua_version = re.search(r"Firefox/(\d+)\.0", DEFAULT_USER_AGENT)
-    impersonate_version = re.search(r"firefox(\d+)", DEFAULT_IMPERSONATE)
+def test_default_user_agent_matches_the_real_installed_firefox_version(monkeypatch):
+    monkeypatch.setattr("misflix.infra.cloudflare.detect_firefox_major_version", lambda: "153")
 
-    assert ua_version is not None
-    assert impersonate_version is not None
-    assert ua_version.group(1) == impersonate_version.group(1)
+    assert _default_user_agent() == "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0"
+
+
+def test_default_user_agent_falls_back_when_version_not_detected(monkeypatch):
+    monkeypatch.setattr("misflix.infra.cloudflare.detect_firefox_major_version", lambda: None)
+
+    assert "Firefox/147.0" in _default_user_agent()
+
+
+def test_default_impersonate_is_the_newest_firefox_profile_available():
+    assert re.fullmatch(r"firefox\d+", _newest_firefox_impersonate())
+
+
+def test_module_level_defaults_are_set():
+    assert re.search(r"Firefox/\d+\.0", DEFAULT_USER_AGENT)
+    assert re.fullmatch(r"firefox\d+", DEFAULT_IMPERSONATE)
 
 
 class FakeResponse:
