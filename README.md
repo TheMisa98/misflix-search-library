@@ -188,3 +188,7 @@ Cubren `core/` (servicios, con el patron de fake objects para no depender de red
 terminal), `infra/` sin red real (`filesystem`, `archives`, `imdb`, `mediafire`,
 `browser_cookies`) y el parseo HTML del provider real (`zona_leros`) contra los
 fixtures grabados en `tests/fixtures/zona_leros/` en vez de contra la red.
+
+## Licencia
+
+[MIT](LICENSE).
