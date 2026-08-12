@@ -9,8 +9,17 @@ from curl_cffi.requests import Response
 from misflix.infra.browser_cookies import load_domain_cookies
 from misflix.infra.browser_launch import open_in_browser
 
-DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"
-DEFAULT_IMPERSONATE: BrowserTypeLiteral = "firefox135"
+# El User-Agent y el perfil de impersonate deben referirse a la MISMA version de
+# Firefox entre si (no a la del navegador real del usuario, que curl_cffi no puede
+# imitar mas alla de lo que el paquete trae empaquetado) - un desfasaje entre ambos
+# es una huella inconsistente que Cloudflare puede usar para seguir desafiando pese a
+# una cf_clearance valida. Subir junto con la version mas nueva que traiga
+# curl_cffi (`python -c "from curl_cffi import BrowserTypeLiteral; import typing;
+# print(typing.get_args(BrowserTypeLiteral))"`) cuando Zen/Firefox se adelante
+# demasiado y Cloudflare vuelva a bloquear tras la verificacion manual (verificado en
+# vivo: paso con Zen 153 contra un impersonate/UA pineados en 135/152).
+DEFAULT_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
+DEFAULT_IMPERSONATE: BrowserTypeLiteral = "firefox147"
 
 
 class CloudflareBlockedError(RuntimeError):

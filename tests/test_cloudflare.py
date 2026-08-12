@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from misflix.infra.cloudflare import CloudflareHttpClient
+import re
+
+from misflix.infra.cloudflare import DEFAULT_IMPERSONATE, DEFAULT_USER_AGENT, CloudflareHttpClient
+
+
+def test_default_user_agent_and_impersonate_name_the_same_firefox_version():
+    ua_version = re.search(r"Firefox/(\d+)\.0", DEFAULT_USER_AGENT)
+    impersonate_version = re.search(r"firefox(\d+)", DEFAULT_IMPERSONATE)
+
+    assert ua_version is not None
+    assert impersonate_version is not None
+    assert ua_version.group(1) == impersonate_version.group(1)
 
 
 class FakeResponse:
