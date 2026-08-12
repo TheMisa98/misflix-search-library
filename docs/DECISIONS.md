@@ -69,3 +69,16 @@ entre los proyectos del autor y separar historial de trabajo en curso del de
 `master`. Si esto no encaja con el flujo real de un proyecto personal de un solo
 colaborador, es la primera candidata a revertirse — anotarlo aquí en vez de
 abandonarla en silencio si se descarta.
+
+## 2026-08-12 — Commits chicos en la rama, squash merge a `master`
+
+Dentro de una rama `feature/<slug>`/`fix/<slug>` se pushean commits chicos a medida
+que se avanza (checkpoints del trabajo en curso, mensajes cortos tipo WIP están bien).
+Al terminar el feature, el merge a `master` se hace con el botón **"Squash and
+merge"** de GitHub sobre el PR — nunca merge normal ni rebase — así el PR queda con
+el historial granular completo (visible en GitHub aunque se borre la rama), y
+`master` recibe un único commit siguiendo la convención completa de mensaje (resumen
+imperativo + cuerpo explicando el *por qué*, ver § Convención de commits). **Motivo**:
+mantener `git log --oneline` en `master` legible (un commit = un feature/fix
+terminado) sin perder la trazabilidad paso a paso del trabajo en curso, que queda en
+el PR.
