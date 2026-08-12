@@ -1,5 +1,7 @@
 # misflix-search
 
+[![CI](https://github.com/TheMisa98/misflix-search-library/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMisa98/misflix-search-library/actions/workflows/ci.yml)
+
 CLI interactivo para buscar y descargar peliculas, series y libros desde tus propios
 repos, con vista previa de portadas directamente en la terminal (protocolo grafico de
 Kitty).

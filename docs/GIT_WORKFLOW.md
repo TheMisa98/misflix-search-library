@@ -67,3 +67,11 @@ git config core.hooksPath .githooks
 
 Nunca usar `--no-verify` para saltarse el hook, salvo que el usuario lo pida
 explícitamente.
+
+## CI
+
+`.github/workflows/ci.yml` corre exactamente los mismos cuatro pasos del hook de
+pre-push (`ruff check`, `ruff format --check`, `mypy`, `pytest`) en GitHub Actions,
+en cada push a `master` y en cada PR. El hook local ya bloquea casi todo antes de
+llegar a GitHub, pero el CI da una señal visible (badge/check en el PR) que no
+depende de que el hook esté habilitado en el clon de turno.
