@@ -4,9 +4,16 @@ import httpx
 
 # User-Agent de navegador de escritorio comun, compartido por todos los
 # clientes HTTP del proyecto (infra/imdb.py, infra/antupload.py,
-# infra/mediafire.py) para no repetir el mismo dict en cada modulo.
+# infra/mediafire.py) para no repetir el mismo dict en cada modulo. A
+# diferencia de infra/cloudflare.py, estos sitios no estan detras de
+# Cloudflare y no atan ninguna cookie a este valor exacto - alcanza con que
+# sea un User-Agent de navegador real y no demasiado viejo, sin necesidad de
+# detectarlo en vivo. Bump manual ocasional (sin fecha fija): la version de
+# Chrome de abajo se tomo de los perfiles de impersonate que trae curl_cffi
+# (ver infra/cloudflare.py) como referencia de "version reciente y real",
+# aunque ningun impersonate se use aca (es httpx plano).
 DEFAULT_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0 Safari/537.36")
 }
 
 

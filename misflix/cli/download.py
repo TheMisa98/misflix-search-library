@@ -437,7 +437,7 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
         if not option.opens_externally:
 
             def try_download_season(
-                _option=option, _season_media=season_media, _folder_name=folder_name
+                _option: DownloadOption = option, _season_media: Media = season_media, _folder_name: str = folder_name
             ) -> Path | None:
                 with prompts.progress_bar() as progress:
                     on_progress = _progress_callback(progress, _folder_name)
@@ -476,12 +476,12 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
                 stem = sanitize_filename(f"{series.title} - S{season_number:02d}E{episode_number:02d}")
 
                 def try_download_episode_part(
-                    _url=url,
-                    _url_index=url_index,
-                    _stem=stem,
-                    _season_media=season_media,
-                    _season_dir=season_dir,
-                    _urls=urls,
+                    _url: str = url,
+                    _url_index: int = url_index,
+                    _stem: str = stem,
+                    _season_media: Media = season_media,
+                    _season_dir: Path = season_dir,
+                    _urls: list[str] = urls,
                 ) -> list[Path]:
                     on_progress = _progress_callback(progress, f"Episodio {_url_index}/{len(_urls)}")
                     return service.download_parts(
@@ -558,7 +558,12 @@ def _download_episodes_batch(
 
         if not option.opens_externally:
 
-            def try_download(_option=option, _episode=episode, _season_dir=season_dir, _stem=stem) -> Path | None:
+            def try_download(
+                _option: DownloadOption = option,
+                _episode: Media = episode,
+                _season_dir: Path = season_dir,
+                _stem: str = stem,
+            ) -> Path | None:
                 with prompts.progress_bar() as progress:
                     on_progress = _progress_callback(progress, _stem)
                     return service.download(
@@ -582,7 +587,9 @@ def _download_episodes_batch(
         else:
             prompts.console.print("[dim]Link directo de Mediafire, se resuelve sin navegador.[/dim]")
 
-        def try_download_parts(_episode=episode, _urls=urls, _season_dir=season_dir, _stem=stem) -> list[Path]:
+        def try_download_parts(
+            _episode: Media = episode, _urls: list[str] = urls, _season_dir: Path = season_dir, _stem: str = stem
+        ) -> list[Path]:
             with prompts.progress_bar() as progress:
                 return service.download_parts(
                     _episode, _urls, _season_dir, folder_name=_stem, progress_factory=_part_progress_factory(progress)
