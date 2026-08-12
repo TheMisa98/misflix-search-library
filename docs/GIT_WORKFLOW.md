@@ -39,23 +39,26 @@ El mismo `gh pr create` (o un `gh pr edit` después) también deja:
   milestones ni projects configurados) — se dejan vacíos salvo que el usuario pida
   algo puntual.
 
-### Limpieza local al terminar de trabajar
+### Limpieza local de ramas
 
-Al cerrar una sesión de trabajo (todas las ramas de esa tanda ya mergeadas o
-descartadas), dejar el repo local limpio:
+La rama local se borra apenas está pusheada y su PR ya creado — **no hace falta
+esperar a que se mergee**. Una vez pusheada, la rama vive respaldada en GitHub (el PR
+la mantiene viva aunque se borre en local); si hace falta retomarla, se trae de
+vuelta con `git fetch origin <rama> && git switch -c <rama> origin/<rama>`.
 
 ```bash
-git switch master && git pull --ff-only
-git remote prune origin                 # saca las ramas remotas ya borradas por GitHub
-git branch -D <rama1> <rama2> ...       # ramas locales de PRs ya mergeados/cerrados
+git switch master
+git branch -D <rama>       # -D: todavia no esta mergeada a master, -d la rechazaria
 ```
 
-El squash merge hace que git nunca reconozca esas ramas como "mergeadas" (el commit
-en `master` tiene otro hash), así que `git branch -d` siempre las va a rechazar con
-"not fully merged" — no es una señal de alerta real, solo hace falta `-D` en vez de
-`-d`. Confirmar primero con `gh pr list --state all` que cada rama a borrar
-corresponde a un PR `MERGED` o `CLOSED` antes de forzar el borrado. Las ramas que no
-sean de este flujo (ej. `test-*`, experimentos sueltos) no se tocan.
+Al final de una sesión con varias ramas de por medio, de paso:
+
+```bash
+git pull --ff-only
+git remote prune origin    # saca del local las ramas remotas que GitHub ya borro (post-merge)
+```
+
+Las ramas que no sean de este flujo (ej. `test-*`, experimentos sueltos) no se tocan.
 
 ## Convención de commits
 
