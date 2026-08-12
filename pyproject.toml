@@ -1,10 +1,12 @@
 [project]
 name = "misflix-search"
 version = "0.1.0"
-description = "Add your description here"
+description = "CLI interactivo para buscar y descargar peliculas, series y libros desde repos no oficiales, con vista previa de portadas en la terminal"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14"
+authors = [{ name = "Misa", email = "misa.rn9912@gmail.com" }]
+urls.Repository = "https://github.com/TheMisa98/misflix-search-library"
 dependencies = [
   "python-dotenv>=1.0.0",
   "typer>=0.12.0",
@@ -21,9 +23,13 @@ misflix = "misflix.cli.app:app"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=6.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--cov=misflix --cov-report=term-missing"
 
 [build-system]
 requires = ["hatchling"]
@@ -54,7 +60,7 @@ convention = "google"
 
 [tool.mypy]
 python_version = "3.14"
-files = ["misflix"]
+files = ["misflix", "main.py"]
 warn_unused_ignores = true
 warn_redundant_casts = true
 check_untyped_defs = true

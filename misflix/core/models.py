@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -63,7 +63,6 @@ class Media:
             varios autores van juntos en un solo string, ej. "Brian Herbert,
             Frank Herbert").
         synopsis: Resumen/sinopsis, si el provider lo expone.
-        extra: Datos adicionales especificos de un provider, sin uso generico.
     """
 
     id: str
@@ -75,4 +74,3 @@ class Media:
     year: int | None = None
     author: str | None = None
     synopsis: str | None = None
-    extra: dict = field(default_factory=dict)

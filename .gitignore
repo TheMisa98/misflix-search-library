@@ -11,3 +11,7 @@ wheels/
 
 # Local configuration
 .env
+
+# Test coverage
+.coverage
+htmlcov/

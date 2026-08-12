@@ -344,6 +344,30 @@ def _read_buffered_line() -> str | None:
     return sys.stdin.readline() if ready else None
 
 
+def _parse_pasted_links(raw_lines: list[str]) -> list[str]:
+    """Extrae, dedupe y ordena por numero de parte los links de `raw_lines`.
+
+    Args:
+        raw_lines: Lineas crudas tal como se pegaron (pueden traer texto
+            alrededor de cada url, y el mismo link repetido mas de una vez).
+
+    Returns:
+        Los links detectados, en orden de parte (los que no traen numero de
+        parte van al final, en el orden en que se pegaron). Vacio si no se
+        detecto ningun link valido.
+    """
+    seen: set[str] = set()
+    urls: list[str] = []
+    for match in _URL_RE.findall("\n".join(raw_lines)):
+        url = match.rstrip(").,;\"'")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+
+    urls.sort(key=lambda u: (part_number(u) is None, part_number(u) or 0))
+    return urls
+
+
 def collect_direct_links() -> list[str]:
     """Pide los links finales resueltos a mano en el navegador.
 
@@ -391,15 +415,7 @@ def collect_direct_links() -> list[str]:
         sys.stdout.write("\x1b[?2004h")
         sys.stdout.flush()
 
-    seen: set[str] = set()
-    urls: list[str] = []
-    for match in _URL_RE.findall("\n".join(raw_lines)):
-        url = match.rstrip(").,;\"'")
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
-
-    urls.sort(key=lambda u: (part_number(u) is None, part_number(u) or 0))
+    urls = _parse_pasted_links(raw_lines)
 
     if not urls:
         console.print("[yellow]No se detecto ningun link valido.[/yellow]")
