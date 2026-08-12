@@ -29,10 +29,18 @@ Requiere terminal **Kitty** (`kitten` en `PATH`) para renderizar portadas — ve
 Mapa completo, detalle de cada provider/flujo y todo lo "verificado en vivo":
 `docs/ARCHITECTURE.md`.
 
-Regla rápida que nunca se rompe: `core/` no importa nada de `infra/` ni de providers
-concretos (solo `Protocol`s y modelos puros); `providers/` implementa esos
-`Protocol`s; `infra/` son detalles técnicos consumidos por composición; `cli/`/`ui/`
-son la única capa que puede importar Typer/Rich/`kitten`.
+Regla rápida: `core/` no importa clases concretas de `providers/` (solo `Protocol`s y
+modelos puros) — nunca sabe qué sitio se scrapea. Con `infra/` la distinción es más
+fina: lo que tiene más de una implementación intercambiable va vía `Protocol`
+(`Downloader`, `HttpGetClient` — ver DIP más abajo); una utilidad de una sola
+implementación (filesystem, extracción de `.rar`, IMDb, resolución de
+mediafire/antupload) se compone directo desde `core/services/`, sin `Protocol` de
+por medio — no hay nada que inyectar ahí. `cli/` no importa `infra/` en absoluto, ni
+siquiera esas utilidades: todo lo que necesita de ahí (tipos de excepción incluidos)
+se re-exporta desde `core/services/download_service.py`, el único punto de contacto
+entre la capa de comandos y los detalles técnicos. `providers/` implementa los
+`Protocol`s de `core/ports.py`; `cli/`/`ui/` son la única capa que puede importar
+Typer/Rich/`kitten`.
 
 ## SOLID — cómo aplica aquí (no en abstracto)
 

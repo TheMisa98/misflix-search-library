@@ -6,24 +6,40 @@ confirmado navegando/probando el sitio real, no asumido ni deducido del HTML). S
 cambia el contrato de un `Protocol` en `core/ports.py` o el límite entre capas,
 este archivo se actualiza en el mismo cambio (ver regla en `CLAUDE.md`).
 
-## Regla rápida de dependencias (no se rompe)
+## Regla rápida de dependencias
 
-- `misflix/core/` no importa nada de `infra/` ni de providers concretos: solo
-  define `Protocol`s (`ports.py`) y modelos puros (`models.py`). El dominio no
-  sabe qué sitio se scrapea ni cómo.
+- `misflix/core/` no importa clases concretas de `providers/`: solo define
+  `Protocol`s (`ports.py`) y modelos puros (`models.py`). El dominio no sabe
+  qué sitio se scrapea ni cómo.
+- Con `infra/` la distinción es más fina, no un bloqueo total. Lo que tiene
+  más de una implementación intercambiable en runtime va vía `Protocol`
+  (`Downloader`, `HttpGetClient` — ver más abajo). Lo que es una utilidad
+  técnica de una sola implementación (filesystem, extracción de `.rar`,
+  IMDb, resolución de mediafire/antupload) no tiene nada que inyectar, así
+  que `core/services/` la compone directo — eso no es una violación de DIP,
+  es una capa de servicio haciendo lo que hace una capa de servicio.
+  **Verificado en vivo (2026-08-12)**: la versión anterior de esta regla
+  ("`core/` nunca importa `infra/`") describía una aspiración, no lo que el
+  código realmente hacía — `download_service.py` ya importaba varias de esas
+  utilidades directo, correctamente, desde el principio.
 - `misflix/providers/` implementa los `Protocol`s de `core/ports.py`. Es la
   única capa que sabe qué HTML/API concreta corresponde a cada fuente.
-- `misflix/infra/` son detalles técnicos (HTTP, Cloudflare, archivos, IMDb)
-  consumidos por providers vía composición — `cli/` y `core/` nunca importan
-  `infra/` directamente.
+- `misflix/cli/` no importa `infra/` en absoluto, ni siquiera esas
+  utilidades de una sola implementación: todo lo que necesita de ahí (los
+  cuatro tipos de excepción de un link caído incluidos, antes importados
+  cada uno desde su propio módulo de `infra/`) se re-exporta desde
+  `core/services/download_service.py` — el único punto de contacto entre la
+  capa de comandos y los detalles técnicos (`LINK_ERRORS`, `ExtractionError`,
+  `is_mediafire_url`, `sanitize_filename`).
 - `misflix/cli/` y `misflix/ui/` son la única capa que puede importar
   Typer/Rich/`kitten` — el dominio no sabe que existe una terminal.
 
-This is enforced today by `core/ports.py`'s `Protocol`s (`SourceProvider`,
-`SeriesProvider`, `Downloader`) and by `base.HttpGetClient`, a structural
-`Protocol` that lets `ZonaLerosProvider` inject `CloudflareHttpClient` where a
-plain `StaticProvider` expects `HttpGetClient`, without any concrete class
-coupling.
+Lo que sí se sigue cumpliendo sin excepción: ninguna implementación
+*intercambiable* de un detalle técnico se importa directo. Eso está reforzado
+hoy por `core/ports.py`'s `Protocol`s (`SourceProvider`, `SeriesProvider`,
+`Downloader`) y por `base.HttpGetClient`, un `Protocol` estructural que deja a
+`ZonaLerosProvider` inyectar `CloudflareHttpClient` donde un `StaticProvider`
+común espera `HttpGetClient`, sin acoplarse a ninguna clase concreta.
 
 ## Capas
 

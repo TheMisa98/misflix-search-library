@@ -10,35 +10,28 @@ from misflix.config.settings import get_settings
 from misflix.core.models import BOOK_KINDS, MOVIE_KINDS, DownloadOption, Media, MediaKind
 from misflix.core.ports import ProgressCallback, SeriesProvider, SourceProvider
 from misflix.core.services.download_service import (
+    LINK_ERRORS,
     DownloadService,
+    ExtractionError,
     ProgressFactory,
     group_episodes_by_season,
+    is_mediafire_url,
     parse_episode_code,
+    sanitize_filename,
     season_folder_name,
 )
-from misflix.infra.antupload import AntuploadResolveError
-from misflix.infra.archives import ExtractionError
-from misflix.infra.downloader import DownloadError
-from misflix.infra.filesystem import sanitize_filename
-from misflix.infra.mediafire import MediaFireResolveError, is_mediafire_url
 from misflix.providers.registry import get_provider
 from misflix.ui import prompts
 from misflix.ui.image_render import FetchBytes
 
 app = typer.Typer(help="Descargar un resultado previamente encontrado.")
 
-# Un link caido (Mediafire/antupload lo dio de baja, la pagina no carga, se corta
-# a mitad de descarga) no deberia tumbar todo el proceso — se atrapan estos tres
-# juntos en cada punto donde se baja un archivo, para poder saltear ese item y
-# seguir con el resto (o, para una pelicula/libro suelto, avisar y cortar prolijo).
-_LINK_ERRORS = (MediaFireResolveError, DownloadError, AntuploadResolveError)
-
 
 def _run_with_retry[T](action: Callable[[], T], description: str, progress: Progress | None = None) -> T | None:
     """Ejecuta `action` y, si falla con un link caido, pregunta si reintentar.
 
     `action` es tipicamente una descarga que puede fallar con uno de
-    `_LINK_ERRORS` — en la practica, casi siempre un timeout de red a mitad
+    `LINK_ERRORS` — en la practica, casi siempre un timeout de red a mitad
     de una descarga de varios GB, no necesariamente un link caido. Sin este
     reintento, despues de un timeout el flujo volvia directo al prompt de
     busqueda sin ofrecer nada mas — confuso, porque un numero ahi se
@@ -65,7 +58,7 @@ def _run_with_retry[T](action: Callable[[], T], description: str, progress: Prog
     while True:
         try:
             return action()
-        except _LINK_ERRORS as exc:
+        except LINK_ERRORS as exc:
             if progress is not None:
                 progress.stop()
             prompts.console.print(f"[red]No se pudo descargar {description} ({exc}).[/red]")

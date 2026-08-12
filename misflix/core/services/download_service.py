@@ -6,18 +6,32 @@ from pathlib import Path
 
 from misflix.core.models import DownloadOption, Media, MediaKind
 from misflix.core.ports import Downloader, ProgressCallback
+from misflix.infra.antupload import AntuploadResolveError as AntuploadResolveError
 from misflix.infra.antupload import download as download_from_antupload
 from misflix.infra.antupload import is_antupload_url
+from misflix.infra.archives import ExtractionError as ExtractionError
 from misflix.infra.archives import delete_rar_parts, extract_rar, flatten_all_videos, flatten_video
 from misflix.infra.browser_launch import open_in_browser
+from misflix.infra.downloader import DownloadError as DownloadError
 from misflix.infra.downloader import HttpxDownloader
-from misflix.infra.filesystem import ensure_dir, sanitize_filename
+from misflix.infra.filesystem import ensure_dir
+from misflix.infra.filesystem import sanitize_filename as sanitize_filename
 from misflix.infra.imdb import resolve_title
-from misflix.infra.mediafire import is_mediafire_url, resolve_direct_url
+from misflix.infra.mediafire import MediaFireResolveError as MediaFireResolveError
+from misflix.infra.mediafire import is_mediafire_url as is_mediafire_url
+from misflix.infra.mediafire import resolve_direct_url
 
 ProgressFactory = Callable[[int, int], ProgressCallback]
 
 _EPISODE_CODE_RE = re.compile(r"(\d+)x(\d+)\s*$")
+
+# Errores de un link caido/corte de red a mitad de descarga (antupload, mediafire o el
+# downloader generico) - se atrapan juntos en cli/download.py alrededor de cada punto
+# donde se baja un archivo, para poder saltear ese item y seguir con el resto en vez de
+# tumbar todo el proceso. Re-exportados aca (junto con ExtractionError, is_mediafire_url
+# y sanitize_filename arriba) para que cli/ no importe infra/ directamente en absoluto -
+# ver "Regla rapida de dependencias" en docs/ARCHITECTURE.md.
+LINK_ERRORS: tuple[type[Exception], ...] = (MediaFireResolveError, DownloadError, AntuploadResolveError)
 
 
 def parse_episode_code(episode_title: str) -> tuple[int, int] | None:
