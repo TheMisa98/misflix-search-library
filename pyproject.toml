@@ -20,9 +20,13 @@ misflix = "misflix.cli.app:app"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=6.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--cov=misflix --cov-report=term-missing"
 
 [build-system]
 requires = ["hatchling"]
