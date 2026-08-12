@@ -100,3 +100,13 @@ realmente resuelve el challenge. El perfil de impersonate de `curl_cffi`
 (`DEFAULT_IMPERSONATE`) no necesita coincidir con esa version — resultó no ser lo que
 Cloudflare estaba chequeando aca — asi que simplemente toma el `firefoxNNN` mas
 nuevo que traiga la version instalada de `curl_cffi`, tambien sin pinear a mano.
+
+## 2026-08-12 — No usar GitHub Actions
+
+Se evaluo agregar `.github/workflows/ci.yml` espejando el hook de pre-push (ruff,
+mypy, pytest) como parte de una revision general de calidad del repo. **Motivo del
+rechazo**: la cuenta de GitHub del autor tiene un problema de facturacion que hace que
+correr Actions genere costo — no tiene sentido pagar por una comprobacion que el hook
+de pre-push local ya cubre en cada push. Las comprobaciones quedan solo en local, via
+`.githooks/pre-push` (ver `docs/GIT_WORKFLOW.md` § Pre-push hook). No proponer CI de
+nuevo salvo que el usuario indique que la situacion de facturacion cambio.
