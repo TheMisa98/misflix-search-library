@@ -99,6 +99,35 @@ def test_download_treats_416_as_already_complete(tmp_path, monkeypatch):
     assert calls == [(11, 11)]
 
 
+def test_download_treats_400_bad_range_as_already_complete(tmp_path, monkeypatch):
+    dest = tmp_path / "movie.rar"
+    dest.write_bytes(b"hello world")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, content=b"bad http range header parse")
+
+    _with_transport(monkeypatch, handler)
+    calls: list[tuple[int, int]] = []
+
+    HttpxDownloader().download("https://example.com/movie.rar", dest, on_progress=lambda d, t: calls.append((d, t)))
+
+    assert dest.read_bytes() == b"hello world"
+    assert calls == [(11, 11)]
+
+
+def test_download_raises_on_400_unrelated_to_range(tmp_path, monkeypatch):
+    dest = tmp_path / "movie.rar"
+    dest.write_bytes(b"hello world")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, content=b"bad request")
+
+    _with_transport(monkeypatch, handler)
+
+    with pytest.raises(DownloadError):
+        HttpxDownloader().download("https://example.com/movie.rar", dest)
+
+
 def test_download_restarts_from_scratch_when_server_ignores_range(tmp_path, monkeypatch):
     dest = tmp_path / "movie.rar"
     dest.write_bytes(b"stale partial")
