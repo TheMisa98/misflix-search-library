@@ -6,11 +6,22 @@ Kitty).
 
 ## Estado
 
-Provider real funcionando: `zona-leros` (peliculas y series, detras de Cloudflare).
-El flujo completo esta implementado: busqueda con portadas en grilla, eleccion de
-temporada completa o episodio suelto para series, resolucion de los links finales
-(paso manual por el navegador cuando el sitio lo exige), descarga con progreso,
-extraccion automatica de `.rar` y organizacion final de los videos.
+Providers reales funcionando: `zona-leros` (peliculas y series, detras de Cloudflare)
+y `lectulandia` (libros epub/pdf). El flujo completo esta implementado: busqueda con
+portadas en grilla, eleccion de temporada completa o episodio suelto para series,
+resolucion de los links finales (paso manual por el navegador cuando el sitio lo
+exige), descarga con progreso, extraccion automatica de `.rar` y organizacion final de
+los videos.
+
+Documentacion mas detallada (mapa de modulos completo, comportamiento "verificado en
+vivo" de cada provider, registro de decisiones de arquitectura y el flujo de git) vive
+en `docs/`:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — mapa de modulos, limites entre capas
+  y el detalle linea a linea de cada provider/flujo.
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — registro de decisiones tipo ADR ligero.
+- [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) — ramas, convencion de commits, hook
+  de pre-push.
 
 ## Arquitectura
 
@@ -37,18 +48,22 @@ misflix_search/
 │   ├── providers/                 # un modulo por repo/fuente scrapeable
 │   │   ├── base.py                # StaticProvider (httpx+bs4)
 │   │   ├── registry.py            # nombre -> instancia de provider
-│   │   └── zona_leros.py          # peliculas + series, detras de Cloudflare
+│   │   ├── zona_leros.py          # peliculas + series, detras de Cloudflare
+│   │   └── lectulandia.py         # libros (epub/pdf)
 │   │
 │   ├── infra/                     # detalles tecnicos (red, extraccion, filesystem)
 │   │   ├── http_client.py         # wrapper de httpx (sitios sin bot-protection)
 │   │   ├── cloudflare.py          # bypass de Cloudflare via cookie + curl_cffi
 │   │   ├── browser_cookies.py     # lee cf_clearance de Firefox/Zen
 │   │   ├── browser_launch.py      # abre el navegador real del usuario
+│   │   ├── browser_version.py     # detecta la version real de Firefox/Zen instalada
 │   │   ├── mediafire.py           # resuelve el link directo de una pagina de Mediafire
+│   │   ├── antupload.py           # descarga autenticada de antupload.com (lectulandia)
 │   │   ├── imdb.py                # resuelve titulo/anio canonico via IMDb (nombre de carpeta)
 │   │   ├── archives.py            # extrae .rar (unrar) y ordena los videos resultantes
 │   │   ├── downloader.py          # descarga en streaming con progreso
-│   │   └── filesystem.py          # sanitizar nombres, crear carpetas
+│   │   ├── filesystem.py          # sanitizar nombres, crear carpetas
+│   │   └── soup.py                # helpers de tipado sobre BeautifulSoup
 │   │
 │   ├── ui/                        # presentacion en terminal
 │   │   ├── image_render.py        # portadas en grilla via `kitten icat` (protocolo Kitty)
@@ -58,15 +73,21 @@ misflix_search/
 │   └── config/
 │       └── settings.py            # settings desde .env (carpetas de descarga, etc.)
 │
+├── docs/                          # wiki interna (arquitectura, decisiones, flujo de git)
 ├── tests/
-│   └── fixtures/zona_leros/       # HTML grabado para testear el parseo sin red
+│   └── fixtures/                  # HTML grabado para testear el parseo sin red
+│       ├── zona_leros/
+│       └── lectulandia/
 └── .env.example
 ```
 
-**Regla de dependencia:** `core/` no importa nada de `infra/`, `ui/` ni `providers/`
-directamente — solo define contratos (`Protocol`) en `ports.py`. Eso permite testear
-la orquestacion sin red ni terminal real, y cambiar cualquier detalle tecnico sin
-tocar el dominio.
+**Regla de dependencia:** `core/` no importa clases concretas de `providers/` ni de
+`ui/` — solo define contratos (`Protocol`) en `ports.py`. Con `infra/` la distincion es
+mas fina: lo intercambiable en runtime (`Downloader`, `HttpGetClient`) va via
+`Protocol`; una utilidad tecnica de una sola implementacion (filesystem, extraccion de
+`.rar`, IMDb) se compone directo desde `core/services/`. `cli/` no importa `infra/` en
+absoluto — todo lo que necesita de ahi se re-exporta desde `core/services/`. Ver el
+detalle completo en [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 **Agregar un repo nuevo** = un archivo en `providers/` (heredando de `StaticProvider`)
 + una linea de registro en `providers/registry.py`. Si el sitio ofrece series,
@@ -186,5 +207,6 @@ uv run pytest
 
 Cubren `core/` (servicios, con el patron de fake objects para no depender de red ni
 terminal), `infra/` sin red real (`filesystem`, `archives`, `imdb`, `mediafire`,
-`browser_cookies`) y el parseo HTML del provider real (`zona_leros`) contra los
-fixtures grabados en `tests/fixtures/zona_leros/` en vez de contra la red.
+`browser_cookies`, `browser_launch`, `browser_version`, `http_client`, `soup`) y el
+parseo HTML de los providers reales (`zona_leros`, `lectulandia`) contra los fixtures
+grabados en `tests/fixtures/` en vez de contra la red.

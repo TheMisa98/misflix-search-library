@@ -1,9 +1,11 @@
 [project]
 name = "misflix-search"
 version = "0.1.0"
-description = "Add your description here"
+description = "CLI interactivo para buscar y descargar peliculas, series y libros desde repos no oficiales, con vista previa de portadas en la terminal"
 readme = "README.md"
 requires-python = ">=3.14"
+authors = [{ name = "Misa", email = "misa.rn9912@gmail.com" }]
+urls.Repository = "https://github.com/TheMisa98/misflix-search-library"
 dependencies = [
   "python-dotenv>=1.0.0",
   "typer>=0.12.0",
