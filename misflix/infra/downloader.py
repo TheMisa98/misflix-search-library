@@ -5,6 +5,8 @@ from pathlib import Path
 
 import httpx
 
+from misflix.infra.http_client import DEFAULT_HEADERS
+
 ProgressCallback = Callable[[int, int], None]
 
 # httpx sin timeout explicito usa 5s para conectar/leer/escribir/pool, demasiado
@@ -48,13 +50,22 @@ class HttpxDownloader:
                 retomar con `Range`.
         """
         resume_from = dest_path.stat().st_size if dest_path.exists() else 0
-        headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
+        headers = {**DEFAULT_HEADERS, "Range": f"bytes={resume_from}-"} if resume_from else dict(DEFAULT_HEADERS)
 
         try:
             with httpx.stream("GET", url, follow_redirects=True, timeout=_TIMEOUT, headers=headers) as response:
                 if resume_from and response.status_code == 416:
                     # El servidor dice que no hay nada mas alla de lo ya
                     # bajado: el archivo parcial ya estaba completo.
+                    if on_progress:
+                        on_progress(resume_from, resume_from)
+                    return
+
+                if resume_from and response.status_code == 400 and b"range" in response.read().lower():
+                    # Mediafire no respeta el 416 estandar: ante un Range que
+                    # arranca en o mas alla del tamano real del archivo (ya
+                    # completo de un intento anterior) responde 400 con el
+                    # body "bad http range header parse". Verificado en vivo.
                     if on_progress:
                         on_progress(resume_from, resume_from)
                     return
