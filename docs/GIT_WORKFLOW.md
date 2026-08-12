@@ -22,12 +22,30 @@ explicando el *por qué*) y que queda como el único commit de ese feature en
 PR de GitHub aunque la rama se borre después del merge. Ver decisión del 2026-08-12 en
 `docs/DECISIONS.md`.
 
+Al pushear una rama por primera vez, se crea el PR en el momento con
+`gh pr create --title "..." --body "..."` — nunca se deja que el usuario tenga que
+entrar a GitHub a crearlo a mano ni a escribirle el resumen desde cero. Título y
+cuerpo siguen la misma convención que un commit grande (ver más abajo: resumen
+imperativo + *por qué*), así el PR ya queda con contenido real de entrada, listo para
+editar si hace falta y mergear con squash cuando el feature esté completo.
+
+El mismo `gh pr create` (o un `gh pr edit` después) también deja:
+
+- **Assignee**: siempre el usuario (`--add-assignee @me`).
+- **Label**: uno según el prefijo de la rama — `fix/<slug>` → `bug`, `feature/<slug>`
+  → `enhancement`, salvo que el cambio sea solo de documentación (ej. archivos bajo
+  `docs/`), en cuyo caso va `documentation` independientemente del prefijo.
+- **Reviewers/Projects/Milestone**: no aplican en este repo (un solo colaborador, sin
+  milestones ni projects configurados) — se dejan vacíos salvo que el usuario pida
+  algo puntual.
+
 ## Convención de commits
 
-- Línea de resumen: modo imperativo, sin punto final (ej. `Document architecture and
-  commands in CLAUDE.md`, `Scaffold CLI architecture with layered providers and add
-  initial test suite`). Dice *qué* cambió, corto para leerse bien en `git log
-  --oneline`.
+- **Siempre en español** (ver regla de Idioma en `CLAUDE.md` — aplica también a
+  mensajes de commit y a título/cuerpo de PRs, no solo a las respuestas al usuario).
+- Línea de resumen: modo imperativo, sin punto final (ej. `Documentar arquitectura y
+  comandos en CLAUDE.md`, `Separar CLI en capas con providers y agregar suite de
+  tests inicial`). Dice *qué* cambió, corto para leerse bien en `git log --oneline`.
 - Línea en blanco, luego un cuerpo explicando *por qué* — la motivación/contexto, no
   una repetición del diff. Para un commit que toca varias cosas no relacionadas,
   partir el cuerpo en bullets `- ` (uno por asunto) en vez de un párrafo grande.
