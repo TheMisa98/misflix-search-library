@@ -29,6 +29,16 @@ cuerpo siguen la misma convención que un commit grande (ver más abajo: resumen
 imperativo + *por qué*), así el PR ya queda con contenido real de entrada, listo para
 editar si hace falta y mergear con squash cuando el feature esté completo.
 
+El mismo `gh pr create` (o un `gh pr edit` después) también deja:
+
+- **Assignee**: siempre el usuario (`--add-assignee @me`).
+- **Label**: uno según el prefijo de la rama — `fix/<slug>` → `bug`, `feature/<slug>`
+  → `enhancement`, salvo que el cambio sea solo de documentación (ej. archivos bajo
+  `docs/`), en cuyo caso va `documentation` independientemente del prefijo.
+- **Reviewers/Projects/Milestone**: no aplican en este repo (un solo colaborador, sin
+  milestones ni projects configurados) — se dejan vacíos salvo que el usuario pida
+  algo puntual.
+
 ## Convención de commits
 
 - **Siempre en español** (ver regla de Idioma en `CLAUDE.md` — aplica también a
