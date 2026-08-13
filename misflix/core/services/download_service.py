@@ -10,7 +10,7 @@ from misflix.infra.antupload import AntuploadResolveError as AntuploadResolveErr
 from misflix.infra.antupload import download as download_from_antupload
 from misflix.infra.antupload import is_antupload_url
 from misflix.infra.archives import ExtractionError as ExtractionError
-from misflix.infra.archives import delete_rar_parts, extract_rar, flatten_all_videos, flatten_video
+from misflix.infra.archives import delete_rar_parts, extract_rar, find_existing_video, flatten_all_videos, flatten_video
 from misflix.infra.browser_launch import open_in_browser
 from misflix.infra.downloader import DownloadError as DownloadError
 from misflix.infra.downloader import HttpxDownloader
@@ -177,6 +177,22 @@ class DownloadService:
         code = parse_episode_code(episode_title)
         season = code[0] if code else 0
         return base_dir / sanitize_filename(series_title) / season_folder_name(season)
+
+    def already_downloaded(self, dest_dir: Path, stem: str) -> Path | None:
+        """Video ya organizado para `stem` en `dest_dir`, si existe.
+
+        Permite retomar una descarga en lote (ej. los episodios de una
+        temporada) sin repetir items ya bajados y extraidos en una corrida
+        anterior — por ejemplo, tras un corte de luz a mitad de camino.
+
+        Args:
+            dest_dir: Carpeta donde deberia estar el video ya organizado.
+            stem: Nombre de archivo (sin extension) a buscar.
+
+        Returns:
+            La ruta del video si ya existe, o None.
+        """
+        return find_existing_video(dest_dir, stem)
 
     def resolve_folder_name(self, media: Media) -> str:
         """Nombre de carpeta estilo Plex `Titulo (anio)` para `media`.

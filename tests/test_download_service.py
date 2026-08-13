@@ -404,3 +404,18 @@ def test_resolve_season_dir_falls_back_to_season_zero_without_a_code(tmp_path):
     result = service.resolve_season_dir("Some Show", "Especial de Navidad", tmp_path)
 
     assert result == tmp_path / "Some Show" / "Season 00"
+
+
+def test_already_downloaded_finds_an_existing_organized_video(tmp_path):
+    (tmp_path / "Breaking Bad - S05E01.mkv").write_bytes(b"x")
+    service = DownloadService(downloader=FakeDownloader())
+
+    result = service.already_downloaded(tmp_path, "Breaking Bad - S05E01")
+
+    assert result == tmp_path / "Breaking Bad - S05E01.mkv"
+
+
+def test_already_downloaded_returns_none_when_nothing_is_there(tmp_path):
+    service = DownloadService(downloader=FakeDownloader())
+
+    assert service.already_downloaded(tmp_path, "Breaking Bad - S05E01") is None
