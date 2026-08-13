@@ -1,6 +1,6 @@
 import typer
 
-from misflix.cli import config, download, search
+from misflix.cli import config, download, links, search
 
 app = typer.Typer(
     name="misflix",
@@ -10,4 +10,5 @@ app = typer.Typer(
 
 app.add_typer(search.app, name="search")
 app.add_typer(download.app, name="download")
+app.add_typer(links.app, name="links")
 app.add_typer(config.app, name="config")

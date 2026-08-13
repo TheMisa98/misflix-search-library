@@ -371,6 +371,12 @@ def _parse_pasted_links(raw_lines: list[str]) -> list[str]:
 def _collect_raw_paste_lines() -> list[str]:
     """Lee lineas pegadas por el usuario hasta una linea en blanco.
 
+    Args:
+        intro: Texto del panel de instrucciones. Por defecto describe el
+            paso de resolver el ad-locker en el navegador; `cli/links.py` lo
+            reemplaza por uno propio ya que ahi no hay ningun navegador de
+            por medio — los links ya los tiene el usuario de antes.
+
     Returns:
         Las lineas crudas tal como se pegaron (posiblemente vacia, si el
         usuario dejo la primera linea en blanco de una).
