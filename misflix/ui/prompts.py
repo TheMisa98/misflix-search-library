@@ -368,30 +368,13 @@ def _parse_pasted_links(raw_lines: list[str]) -> list[str]:
     return urls
 
 
-def collect_direct_links() -> list[str]:
-    """Pide los links finales resueltos a mano en el navegador.
-
-    Se puede pegar todo de una (varias lineas en un solo paste); los links
-    se extraen y ordenan solos por el numero de parte en el nombre de
-    archivo (`partN`), si lo tienen.
+def _collect_raw_paste_lines() -> list[str]:
+    """Lee lineas pegadas por el usuario hasta una linea en blanco.
 
     Returns:
-        Los links detectados, en orden de parte (los que no traen numero de
-        parte van al final, en el orden en que se pegaron). Vacio si no se
-        detecto ningun link valido.
+        Las lineas crudas tal como se pegaron (posiblemente vacia, si el
+        usuario dejo la primera linea en blanco de una).
     """
-    console.print(
-        Panel(
-            "Volve al navegador, completa la verificacion y copia los links de descarga "
-            "que te muestre (MEGA, MEDIAFIRE, etc.).\n"
-            "[dim]Podes pegar todos juntos, no hace falta uno por uno ni en orden — "
-            "se detectan y ordenan solos por el numero de parte (partN) del archivo.[/dim]",
-            title="Pega los links de descarga",
-            border_style="green",
-            expand=False,
-        )
-    )
-
     # Kitty envuelve los pegados con marcadores de "bracketed paste"; si no se
     # desactiva, un paste de varias lineas de un tiron deja basura mezclada entre
     # medio (prompts repetidos, lineas cortadas). Se desactiva mientras leemos.
@@ -414,12 +397,48 @@ def collect_direct_links() -> list[str]:
     finally:
         sys.stdout.write("\x1b[?2004h")
         sys.stdout.flush()
+    return raw_lines
 
-    urls = _parse_pasted_links(raw_lines)
 
-    if not urls:
-        console.print("[yellow]No se detecto ningun link valido.[/yellow]")
-        return urls
+def collect_direct_links() -> list[str]:
+    """Pide los links finales resueltos a mano en el navegador.
+
+    Se puede pegar todo de una (varias lineas en un solo paste); los links
+    se extraen y ordenan solos por el numero de parte en el nombre de
+    archivo (`partN`), si lo tienen. Si se pego algo pero no se reconocio
+    ningun link (ej. un paste con basura o un espacio suelto adelante), se
+    vuelve a pedir en vez de abortar el flujo de descarga en curso — la
+    unica forma de cancelar de una es dejar la primera linea en blanco sin
+    haber pegado nada.
+
+    Returns:
+        Los links detectados, en orden de parte (los que no traen numero de
+        parte van al final, en el orden en que se pegaron). Vacio solo si el
+        usuario cancelo (primera linea en blanco sin pegar nada).
+    """
+    console.print(
+        Panel(
+            "Volve al navegador, completa la verificacion y copia los links de descarga "
+            "que te muestre (MEGA, MEDIAFIRE, etc.).\n"
+            "[dim]Podes pegar todos juntos, no hace falta uno por uno ni en orden — "
+            "se detectan y ordenan solos por el numero de parte (partN) del archivo.[/dim]",
+            title="Pega los links de descarga",
+            border_style="green",
+            expand=False,
+        )
+    )
+
+    while True:
+        raw_lines = _collect_raw_paste_lines()
+        if not raw_lines:
+            return []
+
+        urls = _parse_pasted_links(raw_lines)
+        if urls:
+            break
+        console.print(
+            "[yellow]No se detecto ningun link en lo que pegaste — probá de nuevo (dejá vacío para cancelar).[/yellow]"
+        )
 
     table = Table(title="Links detectados", border_style="green", header_style="bold green")
     table.add_column("Parte", justify="right")
