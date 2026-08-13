@@ -115,3 +115,29 @@ def test_delete_rar_parts_removes_every_rar_in_the_folder(tmp_path):
 
     assert list(tmp_path.glob("*.rar")) == []
     assert (tmp_path / "My Movie.mkv").exists()
+
+
+def test_find_existing_video_returns_the_path_when_present(tmp_path):
+    (tmp_path / "Breaking Bad - S05E01.mkv").write_bytes(b"x")
+
+    result = archives.find_existing_video(tmp_path, "Breaking Bad - S05E01")
+
+    assert result == tmp_path / "Breaking Bad - S05E01.mkv"
+
+
+def test_find_existing_video_returns_none_when_missing(tmp_path):
+    assert archives.find_existing_video(tmp_path, "Breaking Bad - S05E01") is None
+
+
+def test_find_existing_video_ignores_a_partial_rar_still_downloading(tmp_path):
+    (tmp_path / "Breaking Bad - S05E01.rar").write_bytes(b"partial")
+
+    assert archives.find_existing_video(tmp_path, "Breaking Bad - S05E01") is None
+
+
+def test_find_existing_video_does_not_look_inside_subfolders(tmp_path):
+    nested = tmp_path / "extracted"
+    nested.mkdir()
+    (nested / "Breaking Bad - S05E01.mkv").write_bytes(b"x")
+
+    assert archives.find_existing_video(tmp_path, "Breaking Bad - S05E01") is None

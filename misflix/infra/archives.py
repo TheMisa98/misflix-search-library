@@ -57,6 +57,29 @@ def extract_rar(movie_dir: Path, password: str = "zonaleros") -> bool:
     return True
 
 
+def find_existing_video(movie_dir: Path, stem: str) -> Path | None:
+    """Video ya organizado con nombre `stem` en `movie_dir`, si existe.
+
+    Permite reconocer un item ya bajado y extraido en una corrida anterior
+    (ej. un lote de episodios cortado a mitad de camino) sin necesitar un
+    estado aparte: el archivo final en disco, dejado ahi por `flatten_video`/
+    `flatten_all_videos`, ya es la fuente de verdad.
+
+    Args:
+        movie_dir: Carpeta donde buscar (no recursivo: un video ya
+            organizado vive siempre en la raiz, no en una subcarpeta).
+        stem: Nombre de archivo (sin extension) a buscar.
+
+    Returns:
+        La ruta encontrada, o None si no hay ningun video con ese nombre.
+    """
+    for ext in _VIDEO_EXTENSIONS:
+        candidate = movie_dir / f"{stem}{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def flatten_video(movie_dir: Path, target_stem: str) -> Path | None:
     """Mueve el video mas grande de `movie_dir` a su raiz, renombrado.
 

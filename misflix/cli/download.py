@@ -238,10 +238,23 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
     que no se repite esa eleccion como una confirmacion aparte: se avisa
     donde va a quedar y se descarga directo (ver `prompts.choose_option`).
 
+    Interrumpir con Ctrl+C corta prolijo (sin traceback) en vez de propagarse
+    — lo que ya se haya bajado/extraido queda en disco tal cual (los batches
+    de serie, ver `_download_episodes_batch`/`_download_season_packs_batch`,
+    ademas saltan solos lo ya hecho en la proxima corrida).
+
     Args:
         provider: Provider que resolvio `media`.
         media: Media ya resuelto (via `get_media`), a descargar.
     """
+    try:
+        _run_download_flow(provider, media)
+    except KeyboardInterrupt:
+        prompts.console.print("\n[yellow]Descarga interrumpida.[/yellow]")
+
+
+def _run_download_flow(provider: SourceProvider, media: Media) -> None:
+    """Cuerpo de `run_download_flow`, separado para envolverlo en un try/except Ctrl+C."""
     http = getattr(provider, "http", None)
     fetch_bytes = (lambda url: http.get(url).content) if http else None
     prompts.show_cover(media, fetch_bytes=fetch_bytes)
@@ -393,13 +406,27 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
     asi que cada uno se baja y se extrae por separado (ver el comentario mas
     abajo) y terminan en
     `<series_dir>/<Serie>/Season NN/<Serie> - SxxEyy.ext` — el mismo lugar
-    donde caeria un episodio bajado suelto.
+    donde caeria un episodio bajado suelto. Los items ya bajados en una
+    corrida anterior (ej. cortada por un apagado a mitad de temporada) se
+    saltan solos (ver los chequeos de `service.already_downloaded` mas
+    abajo), y un Ctrl+C corta prolijo en vez de propagarse.
 
     Args:
         provider: Provider que resolvio `series`.
         series: Media de la ficha de la serie.
         seasons: Numeros de temporada a descargar, en orden.
     """
+    try:
+        _download_season_packs_batch_body(provider, series, seasons)
+    except KeyboardInterrupt:
+        prompts.console.print(
+            "\n[yellow]Descarga interrumpida. Lo ya bajado/extraido queda guardado — "
+            "corre el mismo comando de nuevo para continuar donde quedaste.[/yellow]"
+        )
+
+
+def _download_season_packs_batch_body(provider: SeriesProvider, series: Media, seasons: list[int]) -> None:
+    """Cuerpo de `_download_season_packs_batch`, separado para envolverlo en un try/except Ctrl+C."""
     if len(seasons) > 1 and not prompts.confirm_batch_download(len(seasons), unit="temporadas"):
         return
 
@@ -435,6 +462,9 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
         season_dir = series_dir / folder_name
 
         if not option.opens_externally:
+            if option.extension and (series_dir / f"{folder_name}{option.extension}").exists():
+                prompts.console.print(f"[dim]Temporada {season_number}: ya descargada, se salta.[/dim]")
+                continue
 
             def try_download_season(
                 _option: DownloadOption = option, _season_media: Media = season_media, _folder_name: str = folder_name
@@ -474,6 +504,10 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
                 code = _parse_code_from_url(url)
                 episode_number = code[1] if code else url_index
                 stem = sanitize_filename(f"{series.title} - S{season_number:02d}E{episode_number:02d}")
+
+                if service.already_downloaded(season_dir, stem):
+                    prompts.console.print(f"[dim]{stem}: ya descargado, se salta.[/dim]")
+                    continue
 
                 def try_download_episode_part(
                     _url: str = url,
@@ -517,7 +551,9 @@ def _download_episodes_batch(
     para el resto, cuando este disponible. Tambien es el camino que usa un
     episodio suelto elegido a mano (lote de uno), asi que un episodio
     siempre termina en el mismo lugar sin importar si se pidio uno solo o
-    todos de una.
+    todos de una. Los episodios ya bajados en una corrida anterior se saltan
+    solos (sin siquiera resolver su ficha completa), y un Ctrl+C corta
+    prolijo en vez de propagarse.
 
     Args:
         provider: Provider que resolvio `series`/`episodes`.
@@ -526,6 +562,19 @@ def _download_episodes_batch(
             arrancar).
         fetch_bytes: Callback para bajar portadas (ver `run_download_flow`).
     """
+    try:
+        _download_episodes_batch_body(provider, series, episodes, fetch_bytes)
+    except KeyboardInterrupt:
+        prompts.console.print(
+            "\n[yellow]Descarga interrumpida. Lo ya bajado/extraido queda guardado — "
+            "corre el mismo comando de nuevo para continuar donde quedaste.[/yellow]"
+        )
+
+
+def _download_episodes_batch_body(
+    provider: SourceProvider, series: Media, episodes: list[Media], fetch_bytes: FetchBytes | None
+) -> None:
+    """Cuerpo de `_download_episodes_batch`, separado para envolverlo en un try/except Ctrl+C."""
     episodes = sorted(episodes, key=lambda e: parse_episode_code(e.title) or (0, 0))
 
     if len(episodes) > 1 and not prompts.confirm_batch_download(len(episodes)):
@@ -536,6 +585,17 @@ def _download_episodes_batch(
     preferred_host: str | None = None
 
     for index, stub in enumerate(episodes, start=1):
+        # El stem/carpeta de un episodio solo dependen de su titulo, ya
+        # disponible en el stub liviano (mismo titulo que usa
+        # group_episodes_by_season para agrupar) — chequear si ya esta
+        # bajado antes de resolver la ficha completa evita, ademas de la
+        # descarga, el viaje de red/Cloudflare de un episodio ya hecho.
+        stem = service.resolve_episode_stem(series.title, stub.title)
+        season_dir = service.resolve_season_dir(series.title, stub.title, settings.series_dir)
+        if service.already_downloaded(season_dir, stem):
+            prompts.console.print(f"[dim]{stem}: ya descargado, se salta.[/dim]")
+            continue
+
         episode = provider.get_media(stub.id)
         if len(episodes) > 1:
             prompts.console.rule(f"Episodio {index}/{len(episodes)}: {episode.title}")
