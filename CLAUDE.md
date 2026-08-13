@@ -73,14 +73,13 @@ Typer/Rich/`kitten`.
    trade-off elegido) se registra en `docs/DECISIONS.md` con fecha y motivo — nunca
    se descarta en silencio.
 4. Nada de `Any` explícito; tipos completos en toda función/clase de `misflix/`.
-5. No hacer commits ni push salvo que se pida explícitamente.
-6. Antes de dar por terminada una tarea: `ruff check`, `ruff format --check`, `mypy`
+5. Antes de dar por terminada una tarea: `ruff check`, `ruff format --check`, `mypy`
    y `pytest` deben pasar limpios. Esto además se hace cumplir automáticamente vía el
    hook de pre-push — ver `docs/GIT_WORKFLOW.md` § Pre-push hook. Nunca usar
    `--no-verify` para saltárselo salvo que el usuario lo pida explícitamente.
-7. **Los commits de este repo NUNCA llevan trailer de coautoría del asistente**
+6. **Los commits de este repo NUNCA llevan trailer de coautoría del asistente**
    (nada de `Co-Authored-By: Claude ...`) — el autor siempre es el usuario.
-8. Commits siguen la convención documentada en `docs/GIT_WORKFLOW.md`; el trabajo
+7. Commits siguen la convención documentada en `docs/GIT_WORKFLOW.md`; el trabajo
    vive en ramas `feature/<slug>` o `fix/<slug>`, nunca directo en `master`. Detalle
    completo, incluyendo por qué se adoptó, en `docs/GIT_WORKFLOW.md` y
    `docs/DECISIONS.md`.
