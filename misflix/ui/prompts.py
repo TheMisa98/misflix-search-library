@@ -368,29 +368,33 @@ def _parse_pasted_links(raw_lines: list[str]) -> list[str]:
     return urls
 
 
-def collect_direct_links() -> list[str]:
-    """Pide los links finales resueltos a mano en el navegador.
+_DEFAULT_LINKS_INTRO = (
+    "Volve al navegador, completa la verificacion y copia los links de descarga "
+    "que te muestre (MEGA, MEDIAFIRE, etc.).\n"
+    "[dim]Podes pegar todos juntos, no hace falta uno por uno ni en orden — "
+    "se detectan y ordenan solos por el numero de parte (partN) del archivo.[/dim]"
+)
+
+
+def collect_direct_links(intro: str = _DEFAULT_LINKS_INTRO) -> list[str]:
+    """Pide links ya resueltos (a mano en el navegador, o ya guardados de antes).
 
     Se puede pegar todo de una (varias lineas en un solo paste); los links
     se extraen y ordenan solos por el numero de parte en el nombre de
     archivo (`partN`), si lo tienen.
+
+    Args:
+        intro: Texto del panel de instrucciones. Por defecto describe el
+            paso de resolver el ad-locker en el navegador; `cli/links.py` lo
+            reemplaza por uno propio ya que ahi no hay ningun navegador de
+            por medio — los links ya los tiene el usuario de antes.
 
     Returns:
         Los links detectados, en orden de parte (los que no traen numero de
         parte van al final, en el orden en que se pegaron). Vacio si no se
         detecto ningun link valido.
     """
-    console.print(
-        Panel(
-            "Volve al navegador, completa la verificacion y copia los links de descarga "
-            "que te muestre (MEGA, MEDIAFIRE, etc.).\n"
-            "[dim]Podes pegar todos juntos, no hace falta uno por uno ni en orden — "
-            "se detectan y ordenan solos por el numero de parte (partN) del archivo.[/dim]",
-            title="Pega los links de descarga",
-            border_style="green",
-            expand=False,
-        )
-    )
+    console.print(Panel(intro, title="Pega los links de descarga", border_style="green", expand=False))
 
     # Kitty envuelve los pegados con marcadores de "bracketed paste"; si no se
     # desactiva, un paste de varias lineas de un tiron deja basura mezclada entre

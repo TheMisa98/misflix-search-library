@@ -27,7 +27,7 @@ from misflix.ui.image_render import FetchBytes
 app = typer.Typer(help="Descargar un resultado previamente encontrado.")
 
 
-def _run_with_retry[T](action: Callable[[], T], description: str, progress: Progress | None = None) -> T | None:
+def run_with_retry[T](action: Callable[[], T], description: str, progress: Progress | None = None) -> T | None:
     """Ejecuta `action` y, si falla con un link caido, pregunta si reintentar.
 
     `action` es tipicamente una descarga que puede fallar con uno de
@@ -69,7 +69,7 @@ def _run_with_retry[T](action: Callable[[], T], description: str, progress: Prog
                 return None
 
 
-def _progress_callback(progress: Progress, description: str) -> ProgressCallback:
+def progress_callback(progress: Progress, description: str) -> ProgressCallback:
     """Crea una tarea en `progress` y devuelve el callback que la actualiza.
 
     Centraliza el trio "crear tarea, definir on_progress, devolverlo" que se
@@ -91,7 +91,7 @@ def _progress_callback(progress: Progress, description: str) -> ProgressCallback
     return on_progress
 
 
-def _part_progress_factory(progress: Progress) -> ProgressFactory:
+def part_progress_factory(progress: Progress) -> ProgressFactory:
     """Fabrica de progreso para `DownloadService.download_parts`.
 
     Crea una tarea "Parte N/total" por parte, todas en la misma `progress`.
@@ -103,7 +103,7 @@ def _part_progress_factory(progress: Progress) -> ProgressFactory:
         Fabrica `(indice, total) -> on_progress` para pasarle a
         `download_parts`.
     """
-    return lambda index, total: _progress_callback(progress, f"Parte {index}/{total}")
+    return lambda index, total: progress_callback(progress, f"Parte {index}/{total}")
 
 
 def _fixed_progress_factory(callback: ProgressCallback) -> ProgressFactory:
@@ -180,7 +180,7 @@ def _parse_code_from_url(url: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
-def _extract_and_flatten(service: DownloadService, stem: str, dest_dir: Path) -> Path | None:
+def extract_and_flatten(service: DownloadService, stem: str, dest_dir: Path) -> Path | None:
     """Extrae el .rar bajado en `dest_dir/<stem>` y deja el video en `dest_dir`.
 
     Mediafire a veces sirve el video ya sin comprimir (`extract_and_organize`
@@ -220,6 +220,52 @@ def _extract_and_flatten(service: DownloadService, stem: str, dest_dir: Path) ->
         video_path.parent.rmdir()
     except OSError:
         pass
+    return final_path
+
+
+def download_and_extract_episode(
+    service: DownloadService, media: Media, urls: list[str], dest_dir: Path, stem: str
+) -> Path | None:
+    """Baja uno o mas links de un unico episodio y lo deja extraido/organizado.
+
+    Con su propia barra de progreso (una por episodio, no compartida con
+    otros items del lote). A diferencia del camino de pelicula
+    (`DownloadService.extract_and_organize`, que deja el video dentro de su
+    propia subcarpeta), aca se aplana un nivel (`extract_and_flatten`)
+    porque un episodio no tiene subcarpeta propia — termina directo en
+    `dest_dir` (la carpeta de la temporada). Usado tanto por
+    `_download_episodes_batch` (episodio scrapeado de un provider) como por
+    `cli/links.py` (episodio insertado a mano).
+
+    Args:
+        service: Servicio con el que bajar/extraer.
+        media: Media al que pertenecen `urls` (usado por `download_parts`
+            para nombrar la descarga si hace falta).
+        urls: Uno o mas links (partes) de este unico episodio.
+        dest_dir: Carpeta de la temporada donde debe quedar el video.
+        stem: Nombre de archivo (sin extension) del episodio.
+
+    Returns:
+        La ruta final del video, o None si se salteo (link caido y el
+        usuario declino reintentar) o no se encontro un video reconocible.
+    """
+
+    def try_download_parts() -> list[Path]:
+        with prompts.progress_bar() as progress:
+            return service.download_parts(
+                media, urls, dest_dir, folder_name=stem, progress_factory=part_progress_factory(progress)
+            )
+
+    result = run_with_retry(try_download_parts, description=stem)
+    if result is None:
+        prompts.console.print(f"[yellow]{stem}: se salta.[/yellow]")
+        return None
+
+    with prompts.console.status("[cyan]Extrayendo con unrar...[/cyan]"):
+        final_path = extract_and_flatten(service, stem, dest_dir)
+
+    if final_path:
+        prompts.console.print(f"[green]Listo:[/green] {final_path}")
     return final_path
 
 
@@ -282,10 +328,10 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
         def try_download_parts() -> list[Path]:
             with prompts.progress_bar() as progress:
                 return service.download_parts(
-                    media, urls, dest_dir, folder_name=folder_name, progress_factory=_part_progress_factory(progress)
+                    media, urls, dest_dir, folder_name=folder_name, progress_factory=part_progress_factory(progress)
                 )
 
-        saved_paths = _run_with_retry(try_download_parts, description=media.title)
+        saved_paths = run_with_retry(try_download_parts, description=media.title)
         if saved_paths is None:
             return
 
@@ -319,10 +365,10 @@ def run_download_flow(provider: SourceProvider, media: Media) -> None:
 
     def try_download() -> Path | None:
         with prompts.progress_bar() as progress:
-            on_progress = _progress_callback(progress, media.title)
+            on_progress = progress_callback(progress, media.title)
             return service.download(media, option, dest_dir, on_progress=on_progress)
 
-    dest_path = _run_with_retry(try_download, description=media.title)
+    dest_path = run_with_retry(try_download, description=media.title)
     if dest_path:
         prompts.console.print(f"[green]Guardado en {dest_path}[/green]")
 
@@ -440,12 +486,12 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
                 _option: DownloadOption = option, _season_media: Media = season_media, _folder_name: str = folder_name
             ) -> Path | None:
                 with prompts.progress_bar() as progress:
-                    on_progress = _progress_callback(progress, _folder_name)
+                    on_progress = progress_callback(progress, _folder_name)
                     return service.download(
                         _season_media, _option, series_dir, filename_stem=_folder_name, on_progress=on_progress
                     )
 
-            dest_path = _run_with_retry(try_download_season, description=f"la temporada {season_number}")
+            dest_path = run_with_retry(try_download_season, description=f"la temporada {season_number}")
             if dest_path is None:
                 prompts.console.print(f"[yellow]Temporada {season_number}: se salta.[/yellow]")
                 continue
@@ -483,7 +529,7 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
                     _season_dir: Path = season_dir,
                     _urls: list[str] = urls,
                 ) -> list[Path]:
-                    on_progress = _progress_callback(progress, f"Episodio {_url_index}/{len(_urls)}")
+                    on_progress = progress_callback(progress, f"Episodio {_url_index}/{len(_urls)}")
                     return service.download_parts(
                         _season_media,
                         [_url],
@@ -492,12 +538,12 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
                         progress_factory=_fixed_progress_factory(on_progress),
                     )
 
-                result = _run_with_retry(try_download_episode_part, description=stem, progress=progress)
+                result = run_with_retry(try_download_episode_part, description=stem, progress=progress)
                 if result is None:
                     prompts.console.print(f"[yellow]{stem}: se salta.[/yellow]")
                     continue
 
-                final_path = _extract_and_flatten(service, stem, season_dir)
+                final_path = extract_and_flatten(service, stem, season_dir)
                 if final_path:
                     prompts.console.print(f"[green]Listo:[/green] {final_path}")
 
@@ -565,12 +611,12 @@ def _download_episodes_batch(
                 _stem: str = stem,
             ) -> Path | None:
                 with prompts.progress_bar() as progress:
-                    on_progress = _progress_callback(progress, _stem)
+                    on_progress = progress_callback(progress, _stem)
                     return service.download(
                         _episode, _option, _season_dir, filename_stem=_stem, on_progress=on_progress
                     )
 
-            dest_path = _run_with_retry(try_download, description=episode.title)
+            dest_path = run_with_retry(try_download, description=episode.title)
             if dest_path is None:
                 prompts.console.print(f"[yellow]{episode.title}: se salta.[/yellow]")
                 continue
@@ -587,24 +633,7 @@ def _download_episodes_batch(
         else:
             prompts.console.print("[dim]Link directo de Mediafire, se resuelve sin navegador.[/dim]")
 
-        def try_download_parts(
-            _episode: Media = episode, _urls: list[str] = urls, _season_dir: Path = season_dir, _stem: str = stem
-        ) -> list[Path]:
-            with prompts.progress_bar() as progress:
-                return service.download_parts(
-                    _episode, _urls, _season_dir, folder_name=_stem, progress_factory=_part_progress_factory(progress)
-                )
-
-        result = _run_with_retry(try_download_parts, description=episode.title)
-        if result is None:
-            prompts.console.print(f"[yellow]{episode.title}: se salta.[/yellow]")
-            continue
-
-        with prompts.console.status("[cyan]Extrayendo con unrar...[/cyan]"):
-            final_path = _extract_and_flatten(service, stem, season_dir)
-
-        if final_path:
-            prompts.console.print(f"[green]Listo:[/green] {final_path}")
+        download_and_extract_episode(service, episode, urls, season_dir, stem)
 
 
 @app.command("movies")

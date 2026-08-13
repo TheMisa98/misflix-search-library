@@ -74,6 +74,29 @@ services, or UI:
   there's nothing left to page just falls through as a literal new search, same as any
   other text. `config.py` prints the resolved settings. No scraping or business logic
   lives here.
+  - `links.py` covers the case where the user already has links resolved from before
+    (ex. a Mediafire link for a whole series, gotten from a previous session) and wants
+    to insert them directly, skipping `search`/a provider entirely — `links movies`
+    (movie or series, same split as `search`/`download`) and `links books`. It has no
+    `query`/`source`/`media_id` arguments: everything is prompted interactively, since
+    there's nothing to look up. It reuses `DownloadService.download_parts`/
+    `extract_and_organize` and `prompts.collect_direct_links` (now parameterized with an
+    `intro` override, since the default panel text assumes a browser step that doesn't
+    happen here) — the same machinery `download.py` uses for a provider's
+    `opens_externally` option, minus the "open the browser" step. It also imports
+    `download.py`'s `run_with_retry`, `part_progress_factory`, `ExtractionError`, and
+    the shared `download_and_extract_episode` (episode-style download+extract: own
+    progress bar, flattened into the season folder instead of kept in its own
+    subfolder — see the movie vs. episode distinction below) directly, since both stay
+    inside `cli/`. A season inserted this way has no way to recover episode numbers
+    from an arbitrary Mediafire link, so `links.py` numbers them sequentially from a
+    user-given starting episode instead of parsing the URL (contrast with
+    `_parse_code_from_url`, used only for zona-leros' own season-pack URLs, which do
+    encode the episode). A manually-inserted book lands in its own subfolder
+    (`books_dir/<Titulo>/<Titulo>.<ext>`, via `download_parts`) rather than flat in
+    `books_dir` like the lectulandia/antupload path — an intentional, minor deviation:
+    reusing `download_parts` (instead of a bespoke single-file path) is what gets
+    Mediafire page resolution for free, at the cost of always creating a folder.
   - Dead links don't abort a download: `MediaFireResolveError` (page unreachable, or
     reachable but missing `#downloadButton` — Mediafire's "file no longer available"
     state), `DownloadError` (`infra/downloader.py`; any `httpx.HTTPError` while
@@ -82,7 +105,7 @@ services, or UI:
     for `extract_rar`'s glob to trip over later), and `AntuploadResolveError` are caught
     together (`_LINK_ERRORS` in `download.py`) around every place a file actually gets
     downloaded — most commonly a network timeout partway through a multi-GB download,
-    not necessarily a dead link. Every one of those points goes through `_run_with_retry`
+    not necessarily a dead link. Every one of those points goes through `run_with_retry`
     (verified live: without it, a failed download just dropped the user back at the
     search prompt with no indication of what to do next — confusing enough that a
     number typed there, meant as "retry with option 4", got interpreted as a brand new
@@ -93,7 +116,7 @@ services, or UI:
     flow only continues back to the search prompt once a download actually succeeded or
     the user explicitly gave up on retrying — not silently after any failure. When the
     retry loop sits inside a shared `progress_bar()` spanning multiple items (season
-    pack episodes), `_run_with_retry` is handed that `Progress` object to pause/resume
+    pack episodes), `run_with_retry` is handed that `Progress` object to pause/resume
     around the confirm prompt, since rich's live refresh otherwise fights the prompt for
     the terminal; the other call sites build a fresh progress bar per attempt inside the
     retried callable itself, so it's simply gone (closed via its own `with`) by the time
@@ -153,7 +176,7 @@ services, or UI:
     "look for a continuation"), extracts only that first episode, reports success, and
     the code then deleted *all* the `.rar`s on the assumption extraction had used them
     — silently losing every other episode's still-unextracted archive. Instead, each url
-    in the list is downloaded and extracted **individually** (`_extract_and_flatten`,
+    in the list is downloaded and extracted **individually** (`extract_and_flatten`,
     shared with `_download_episodes_batch`'s single-episode tail): season/episode number
     comes from `_parse_code_from_url` matching `S\d{1,2}E\d{1,2}` in the url itself (the
     real Mediafire filenames already contain it, e.g. `RCKYMRTS01E01_ZL.rar`), falling

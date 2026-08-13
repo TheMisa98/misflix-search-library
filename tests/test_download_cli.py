@@ -2,7 +2,7 @@ import pytest
 import typer
 
 from misflix.cli import download
-from misflix.cli.download import _download, _parse_code_from_url, _run_with_retry, _try_resolve_without_browser
+from misflix.cli.download import _download, _parse_code_from_url, _try_resolve_without_browser, run_with_retry
 from misflix.core.models import DownloadOption, Media, MediaKind
 from misflix.infra.downloader import DownloadError
 
@@ -116,7 +116,7 @@ def test_download_rejects_a_mismatched_kind(monkeypatch, capsys):
 def test_run_with_retry_returns_the_result_without_asking_when_it_succeeds(monkeypatch):
     monkeypatch.setattr(typer, "confirm", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no deberia preguntar")))
 
-    assert _run_with_retry(lambda: "ok", description="X") == "ok"
+    assert run_with_retry(lambda: "ok", description="X") == "ok"
 
 
 def test_run_with_retry_retries_once_confirmed_and_returns_the_second_attempt(monkeypatch):
@@ -129,7 +129,7 @@ def test_run_with_retry_retries_once_confirmed_and_returns_the_second_attempt(mo
             raise result
         return result
 
-    assert _run_with_retry(action, description="X") == "ok"
+    assert run_with_retry(action, description="X") == "ok"
 
 
 def test_run_with_retry_gives_up_when_the_user_declines(monkeypatch):
@@ -138,7 +138,7 @@ def test_run_with_retry_gives_up_when_the_user_declines(monkeypatch):
     def action():
         raise DownloadError("timeout")
 
-    assert _run_with_retry(action, description="X") is None
+    assert run_with_retry(action, description="X") is None
 
 
 def test_run_with_retry_pauses_and_resumes_a_shared_progress_bar(monkeypatch):
@@ -155,6 +155,6 @@ def test_run_with_retry_pauses_and_resumes_a_shared_progress_bar(monkeypatch):
     def action():
         raise DownloadError("timeout")
 
-    _run_with_retry(action, description="X", progress=FakeProgress())
+    run_with_retry(action, description="X", progress=FakeProgress())
 
     assert events == ["stop", "start"]
