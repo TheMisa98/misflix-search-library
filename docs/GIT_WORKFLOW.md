@@ -7,6 +7,10 @@ decisión del 2026-08-10 en `docs/DECISIONS.md` — antes de esa fecha todo se c
 directo a `master`). Nombre corto, en inglés o español, que describa el cambio
 (`feature/lectulandia-author-pages`, `fix/season-pack-part-detection`).
 
+La rama se crea automáticamente en cuanto se identifica que la tarea es un fix o
+feature — antes de empezar a escribir código, sin pedir permiso para crearla — para
+no terminar construyendo directo sobre `master` por accidente.
+
 ### Commits chicos en la rama, squash merge a `master`
 
 Mientras se trabaja en la rama, se pushean commits chicos a medida que se avanza —
@@ -72,8 +76,6 @@ Las ramas que no sean de este flujo (ej. `test-*`, experimentos sueltos) no se t
   partir el cuerpo en bullets `- ` (uno por asunto) en vez de un párrafo grande.
 - Nunca agregar `Co-Authored-By: Claude` (ni ninguna variante) — el autor siempre es
   el usuario.
-- No hacer commits ni push salvo que se pida explícitamente (regla general del
-  asistente, reafirmada aquí por ser repo personal).
 
 ## Pre-push hook
 
