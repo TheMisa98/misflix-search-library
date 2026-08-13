@@ -39,6 +39,27 @@ El mismo `gh pr create` (o un `gh pr edit` después) también deja:
   milestones ni projects configurados) — se dejan vacíos salvo que el usuario pida
   algo puntual.
 
+### Limpieza local de ramas
+
+La rama local se borra apenas está pusheada y su PR ya creado — **no hace falta
+esperar a que se mergee**. Una vez pusheada, la rama vive respaldada en GitHub (el PR
+la mantiene viva aunque se borre en local); si hace falta retomarla, se trae de
+vuelta con `git fetch origin <rama> && git switch -c <rama> origin/<rama>`.
+
+```bash
+git switch master
+git branch -D <rama>       # -D: todavia no esta mergeada a master, -d la rechazaria
+```
+
+Al final de una sesión con varias ramas de por medio, de paso:
+
+```bash
+git pull --ff-only
+git remote prune origin    # saca del local las ramas remotas que GitHub ya borro (post-merge)
+```
+
+Las ramas que no sean de este flujo (ej. `test-*`, experimentos sueltos) no se tocan.
+
 ## Convención de commits
 
 - **Siempre en español** (ver regla de Idioma en `CLAUDE.md` — aplica también a
