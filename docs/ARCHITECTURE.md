@@ -366,7 +366,12 @@ services, or UI:
     archive and fail) and flattens the result: `flatten_video` keeps the single largest
     video file for a movie/episode (renamed to match the folder), `flatten_all_videos`
     keeps every video for a season pack (original names kept). Deletes the `.rar` parts
-    only after confirming a video was actually extracted and moved.
+    only after confirming a video was actually extracted and moved. Both `touch()` the
+    final video after moving it — verified live: `unrar` restores the mtime stored inside
+    the `.rar` on extraction (the uploader's original date, sometimes years old), and this
+    setup's Jellyfin instance (see the top-level `~/misflix` docker-compose stack) falls
+    back to a file's mtime as its "date added" when nothing else says otherwise, so an
+    un-touched video would silently never show up as newly added.
   - `downloader.py` — streaming download with a progress callback; wraps any
     `httpx.HTTPError` (dead link, connection cut mid-stream, etc.) into `DownloadError`
     and deletes whatever partial file it had written before re-raising.

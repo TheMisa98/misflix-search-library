@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -79,6 +81,22 @@ def test_flatten_video_picks_the_largest_candidate(tmp_path):
     assert result.read_bytes() == b"x" * 1000
 
 
+def test_flatten_video_updates_mtime_to_now_even_if_the_rar_restored_an_old_one(tmp_path):
+    # unrar restaura el mtime guardado dentro del .rar al extraer (tipicamente
+    # de hace anios, la fecha en que el uploader lo armo) - Jellyfin usa el
+    # mtime del archivo como "fecha agregada" a falta de otro dato, asi que sin
+    # esto el video queda fechado en el pasado y nunca aparece como reciente.
+    video = tmp_path / "random_name.mkv"
+    video.write_bytes(b"x" * 100)
+    old_timestamp = time.time() - 60 * 60 * 24 * 365 * 3
+    os.utime(video, (old_timestamp, old_timestamp))
+
+    result = archives.flatten_video(tmp_path, "My Movie")
+
+    assert result is not None
+    assert result.stat().st_mtime > time.time() - 5
+
+
 def test_flatten_all_videos_moves_every_episode_keeping_original_names(tmp_path):
     season_folder = tmp_path / "Rick y Morty S09"
     season_folder.mkdir()
@@ -90,6 +108,17 @@ def test_flatten_all_videos_moves_every_episode_keeping_original_names(tmp_path)
     assert sorted(p.name for p in result) == ["Rick.y.Morty.S09E01.mkv", "Rick.y.Morty.S09E02.mkv"]
     assert all(p.parent == tmp_path for p in result)
     assert not season_folder.exists()
+
+
+def test_flatten_all_videos_updates_mtime_to_now_even_if_the_rar_restored_an_old_one(tmp_path):
+    video = tmp_path / "Rick.y.Morty.S09E01.mkv"
+    video.write_bytes(b"x")
+    old_timestamp = time.time() - 60 * 60 * 24 * 365 * 3
+    os.utime(video, (old_timestamp, old_timestamp))
+
+    result = archives.flatten_all_videos(tmp_path)
+
+    assert all(p.stat().st_mtime > time.time() - 5 for p in result)
 
 
 def test_flatten_all_videos_avoids_overwriting_name_collisions(tmp_path):
