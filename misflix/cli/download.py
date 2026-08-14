@@ -452,10 +452,13 @@ def _download_season_packs_batch(provider: SeriesProvider, series: Media, season
     asi que cada uno se baja y se extrae por separado (ver el comentario mas
     abajo) y terminan en
     `<series_dir>/<Serie>/Season NN/<Serie> - SxxEyy.ext` — el mismo lugar
-    donde caeria un episodio bajado suelto. Los items ya bajados en una
-    corrida anterior (ej. cortada por un apagado a mitad de temporada) se
-    saltan solos (ver los chequeos de `service.already_downloaded` mas
-    abajo), y un Ctrl+C corta prolijo en vez de propagarse.
+    donde caeria un episodio bajado suelto. Una temporada ya completa (todos
+    sus episodios ya bajados en una corrida anterior) se salta *antes* de
+    abrir el navegador — ver el chequeo contra `provider.get_episodes` mas
+    abajo; una temporada a medias sigue abriendo el navegador una vez (no
+    hay forma de evitarlo, el Turnstile es por pagina) pero salta los
+    episodios individuales ya hechos dentro de ese loop. Un Ctrl+C corta
+    prolijo en vez de propagarse.
 
     Args:
         provider: Provider que resolvio `series`.
@@ -481,6 +484,12 @@ def _download_season_packs_batch_body(provider: SeriesProvider, series: Media, s
     series_dir = settings.series_dir / sanitize_filename(series.title)
     preferred_host: str | None = None
 
+    # No hay forma de saber si una temporada ya esta completa sin conocer
+    # cuantos episodios tiene — get_episodes es un scrape normal (no pasa
+    # por el ad-locker/Cloudflare), asi que se puede pedir una sola vez acá
+    # y comparar contra el disco antes de abrir el navegador por nada.
+    episodes_by_season = group_episodes_by_season(provider.get_episodes(series))
+
     for index, season_number in enumerate(seasons, start=1):
         season_media = Media(
             id=f"{series.id}:season-{season_number}",
@@ -491,6 +500,19 @@ def _download_season_packs_batch_body(provider: SeriesProvider, series: Media, s
         )
         if len(seasons) > 1:
             prompts.console.rule(f"Temporada {index}/{len(seasons)}: {season_media.title}")
+
+        folder_name = season_folder_name(season_number)
+        season_dir = series_dir / folder_name
+
+        expected_episodes = episodes_by_season.get(season_number, [])
+        if expected_episodes and all(
+            service.already_downloaded(season_dir, service.resolve_episode_stem(series.title, episode.title))
+            for episode in expected_episodes
+        ):
+            prompts.console.print(
+                f"[dim]Temporada {season_number}: ya completa ({len(expected_episodes)} episodios), se salta.[/dim]"
+            )
+            continue
 
         options = provider.get_season_download_options(series, season_number)
         if not options:
@@ -503,9 +525,6 @@ def _download_season_packs_batch_body(provider: SeriesProvider, series: Media, s
         if option is None:
             option = prompts.choose_option(options)
         preferred_host = prompts.option_host(option)
-
-        folder_name = season_folder_name(season_number)
-        season_dir = series_dir / folder_name
 
         if not option.opens_externally:
             if option.extension and (series_dir / f"{folder_name}{option.extension}").exists():
