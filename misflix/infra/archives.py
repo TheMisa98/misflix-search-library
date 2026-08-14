@@ -88,6 +88,12 @@ def flatten_video(movie_dir: Path, target_stem: str) -> Path | None:
     a la raiz de `movie_dir` renombrado a `target_stem` + su extension, y
     limpia las subcarpetas que queden vacias.
 
+    `unrar` restaura el mtime guardado dentro del .rar al extraer (tipicamente
+    la fecha en que el uploader original armo el archivo, no la de hoy) — se
+    actualiza a la fecha actual antes de devolverlo para que Jellyfin (que usa
+    el mtime del archivo como "fecha agregada" a falta de otro dato) lo
+    reconozca como recien agregado en vez de mostrarlo con años de atraso.
+
     Args:
         movie_dir: Carpeta donde buscar videos (recursivo).
         target_stem: Nombre (sin extension) para el video movido.
@@ -103,6 +109,7 @@ def flatten_video(movie_dir: Path, target_stem: str) -> Path | None:
     dest = movie_dir / f"{target_stem}{video.suffix.lower()}"
     if video != dest:
         video.rename(dest)
+    dest.touch()
 
     for entry in sorted(movie_dir.iterdir(), reverse=True):
         if entry.is_dir():
@@ -121,7 +128,9 @@ def flatten_all_videos(movie_dir: Path) -> list[Path]:
     temporada completa): mueve TODOS los videos encontrados (recursivo) a la
     raiz de `movie_dir`, conservando sus nombres originales en vez de
     renombrarlos a un unico `target_stem` (el pack ya suele traerlos bien
-    nombrados por episodio). Limpia las subcarpetas que queden vacias.
+    nombrados por episodio). Limpia las subcarpetas que queden vacias. Cada
+    video queda con el mtime actualizado a la fecha actual — ver el porque en
+    `flatten_video`.
 
     Args:
         movie_dir: Carpeta donde buscar videos (recursivo).
@@ -138,6 +147,7 @@ def flatten_all_videos(movie_dir: Path) -> list[Path]:
             dest = movie_dir / f"{video.stem}_{index}{video.suffix}"
         if video != dest:
             video.rename(dest)
+        dest.touch()
         moved.append(dest)
 
     for entry in sorted(movie_dir.iterdir(), reverse=True):
