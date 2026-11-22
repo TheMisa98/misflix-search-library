@@ -12,6 +12,8 @@ usuario*.
 | `P-1` | Subtítulos | **Verificar mejor contra la voz.** Contra la voz sola, el 14 % de los subtítulos correctos no se distingue del azar (calibración del 2026-11-22). Por eso 30 subtítulos restaurados siguen `dudoso`: de Grimm, The Office, Silicon Valley, The Bear y una película, todos sin subtítulo inglés con qué comparar. Propuesta: detectar el habla con el VAD de Silero que trae libwhisper 1.8.1 (`whisper_vad_*`) en vez de con los niveles de volumen, recalibrar y subir `VERIFIER_VERSION` para que los dudosos se reevalúen solos | listo para trabajar | [La voz sola nunca saca un subtítulo](DECISIONS.md) (2026-11-22) |
 | `P-2` | Infraestructura | **Dockerizar.** Propuesta: empezar por el servicio de subtítulos, porque el CLI interactivo necesita la terminal Kitty del host para las portadas. Puntos abiertos en las notas de abajo | listo para trabajar | pedido del usuario (2026-11-22) |
 | `P-3` | Infraestructura | **Base de datos real (PostgreSQL o MongoDB)** en vez de SQLite. Hoy solo `misflix subs` guarda estado, en `~/.local/state/misflix/subs.db`: videos, intentos, acciones y búsquedas en caché. Va de la mano con `P-2` (la base en su propio contenedor) | espera al usuario (elegir PostgreSQL o MongoDB) | pedido del usuario (2026-11-22), `misflix/infra/subtitle_store.py` |
+| `P-4` | CLI | **Quitar el voseo de los mensajes**, porque el usuario usa tú. Quedan formas de vos en `cli/subs.py` ("Esperá", "detenelo", "Definí", "corré", "resolvé"), en `ui/prompts.py` ("queres", "probá", "dejá") y en el README ("tenes", "escribis") | listo para trabajar | búsqueda del 2026-11-22 |
+| `P-5` | Interfaz | **Interfaz web para administrar todo el sistema**: manejar desde una vista web lo que hoy se hace por terminal. Por ejemplo: buscar y bajar películas, series y libros; ver el estado de los subtítulos (lo de `misflix subs status`: dudosos, no encontrados, cambios, respaldos y restaurar); ver el servicio (si corre, su log, la última pasada); y editar la configuración | espera al usuario (alcance y acceso: solo esta máquina o la red local) | pedido del usuario (2026-11-22) |
 
 ## Notas para arrancar
 
@@ -60,3 +62,21 @@ usuario*.
   `docs/DECISIONS.md`.
 - Hay que pasar los datos de la `subs.db` actual al motor nuevo. Si no, se pierden los
   intentos ya probados y el registro de respaldos, que es lo que permite restaurar.
+
+### P-5 — Interfaz web de administración
+
+- **Capas:** la web sería otra capa de presentación, como `cli/` y `ui/`. Habla con
+  `core/services/` y no importa `infra/` (regla de `CLAUDE.md`). Lo que hoy se
+  re-exporta para el CLI desde `core/services/` le sirve igual.
+- **Stack cerrado:** el framework web, y el frontend si es aparte, se registran en
+  `docs/DECISIONS.md` antes de agregarlos.
+- **Cloudflare:** zona-leros y subdivx piden resolver la verificación en el navegador
+  real del usuario. Si la web corre en esta máquina, puede avisar y esperar la cookie
+  como hoy.
+- **Portadas:** hoy se dibujan en la terminal con Kitty (`kitten icat`); en la web son
+  imágenes normales.
+- **Pasadas de subtítulos:** si la web lanza pasadas, el candado de una pasada a la vez
+  (`flock` en `state_dir/subs.lock`) ya las coordina con el servicio.
+- **Relación con P-2 y P-3:** va de la mano con `P-2` (la web en un contenedor junto al
+  servicio) y con `P-3` (una base que la web y el servicio usen a la vez).
+- **Acceso:** si se abre a la red local, necesita autenticación.
