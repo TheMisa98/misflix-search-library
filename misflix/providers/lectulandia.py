@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from misflix.core.models import DownloadOption, Media, MediaKind
+from misflix.core.models import Author, DownloadOption, Media, MediaKind
 from misflix.infra.soup import attr
 from misflix.providers.base import StaticProvider
 
@@ -57,10 +57,11 @@ class LectulandiaProvider(StaticProvider):
 
         Returns:
             Libros encontrados, incluyendo los de cualquier autor/serie que
-            la busqueda haya emparejado.
+            la busqueda haya emparejado. Para traer *solo* los libros de un
+            autor (sin resultados por texto ni series), ver
+            `search_authors`/`get_author_books`.
         """
-        url = f"{BASE_URL}/search/{quote(query)}"
-        soup = BeautifulSoup(self.http.get(url).text, "lxml")
+        soup = self._fetch_search_page(query)
 
         results = _parse_book_cards(soup, self.name)
         seen_ids = {book.id for book in results}
@@ -78,6 +79,65 @@ class LectulandiaProvider(StaticProvider):
                     results.append(book)
 
         return results
+
+    def search_authors(self, query: str) -> list[Author]:
+        """Autores que lectulandia empareja con `query`.
+
+        Usa el mismo bloque "Autores:" de la pagina de resultados que
+        `search` (ver arriba) — pero solo ese, no el de "Series:". Verificado
+        en vivo: el sitio empareja por substring, asi que "king" trae 34
+        autores (Stephen King, Kingsley Amis, Stephen W. Hawking...) y
+        "asimov" trae a Isaac y a Janet Asimov; elegir entre ellos es
+        responsabilidad del caller (ver `cli/search.py`).
+
+        Args:
+            query: Texto de busqueda.
+
+        Returns:
+            Autores emparejados, en el orden del sitio, sin duplicados.
+        """
+        soup = self._fetch_search_page(query)
+        authors: list[Author] = []
+        seen: set[str] = set()
+        for section in soup.select("section.content-current"):
+            heading = section.select_one("h2")
+            if heading is None or not heading.get_text(strip=True).lower().startswith("autor"):
+                continue
+            for link in section.select(".taxs a.term[href]"):
+                page_url = urljoin(BASE_URL, attr(link, "href"))
+                if page_url in seen:
+                    continue
+                seen.add(page_url)
+                authors.append(
+                    Author(
+                        id=_slug_from_url(page_url),
+                        name=link.get_text(strip=True),
+                        source=self.name,
+                        page_url=page_url,
+                    )
+                )
+        return authors
+
+    def get_author_books(self, author: Author) -> list[Media]:
+        """Todos los libros de la pagina de `author`, con paginacion.
+
+        Args:
+            author: Autor devuelto por `search_authors`.
+
+        Returns:
+            Libros de `/autor/<slug>/`, sin duplicados.
+        """
+        books: list[Media] = []
+        seen_ids: set[str] = set()
+        for book in self._fetch_taxonomy_books(author.page_url):
+            if book.id not in seen_ids:
+                seen_ids.add(book.id)
+                books.append(book)
+        return books
+
+    def _fetch_search_page(self, query: str) -> BeautifulSoup:
+        url = f"{BASE_URL}/search/{quote(query)}"
+        return BeautifulSoup(self.http.get(url).text, "lxml")
 
     def _fetch_taxonomy_books(self, start_url: str) -> list[Media]:
         """Trae todos los libros de una pagina de autor/serie, con paginacion.

@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, DownloadColumn, Progress, TimeRemainingColumn, TransferSpeedColumn
 from rich.table import Table
 
-from misflix.core.models import DownloadOption, Media, MediaKind
+from misflix.core.models import Author, DownloadOption, Media, MediaKind
 from misflix.infra.filesystem import part_number
 from misflix.ui.image_render import Card, CoverRenderer, FetchBytes
 
@@ -146,6 +146,28 @@ def choose_episode(episodes: list[Media]) -> Media:
 
     console.print(table)
     return episodes[_prompt_choice("Elegi un episodio", len(episodes)) - 1]
+
+
+def choose_author(authors: list[Author]) -> Author:
+    """Muestra `authors` en una tabla y pide elegir uno.
+
+    Args:
+        authors: Autores emparejados por la busqueda (ver
+            `SearchService.search_authors`).
+
+    Returns:
+        El autor elegido.
+    """
+    table = Table(title="Autores encontrados", border_style="cyan", header_style="bold cyan")
+    table.add_column("#", justify="right", style="bold", no_wrap=True)
+    table.add_column("Autor", style="magenta")
+    table.add_column("Repo", style="dim")
+
+    for i, author in enumerate(authors, start=1):
+        table.add_row(str(i), author.name, author.source)
+
+    console.print(table)
+    return authors[_prompt_choice("Elegi un autor", len(authors)) - 1]
 
 
 _SERIES_MODE_LABELS = {

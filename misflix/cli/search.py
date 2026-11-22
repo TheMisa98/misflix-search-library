@@ -3,11 +3,11 @@ from collections.abc import Set as AbstractSet
 import typer
 
 from misflix.cli.download import run_download_flow
-from misflix.core.models import BOOK_KINDS, MOVIE_KINDS, Media, MediaKind
+from misflix.core.models import BOOK_KINDS, MOVIE_KINDS, Author, Media, MediaKind
 from misflix.core.ports import SourceProvider
-from misflix.core.services.search_service import SearchService
+from misflix.core.services.search_service import SearchService, exact_author_match
 from misflix.providers.registry import get_all_providers
-from misflix.ui import views
+from misflix.ui import prompts, views
 from misflix.ui.image_render import FetchBytes
 
 app = typer.Typer(help="Buscar peliculas, series o libros en los repos configurados.")
@@ -18,6 +18,7 @@ _PROMPT_WITH_MORE = (
     "escribi para buscar otra cosa, o enter para salir ›"
 )
 _MORE_COMMANDS = {"mas", "más"}
+_AUTHOR_RETRY_PROMPT = "Escribi otro autor para buscar, o enter para salir ›"
 
 
 class _More:
@@ -54,6 +55,13 @@ def movies(
 def books(
     query: str,
     source: str = typer.Option(None, help="Limitar la busqueda a un repo especifico."),
+    author: bool = typer.Option(
+        False,
+        "--author",
+        "--autor",
+        "-a",
+        help="Tratar la busqueda como un autor y traer solo los libros de su pagina.",
+    ),
 ) -> None:
     """Busca libros.
 
@@ -63,8 +71,14 @@ def books(
     Args:
         query: Texto de busqueda.
         source: Si se da, restringe la busqueda a ese repo unicamente.
+        author: Si es True, `query` se trata como un autor: en vez de la
+            busqueda normal (texto + autores + series emparejados, todo
+            junto) se muestran solo los libros de la pagina de ese autor.
     """
-    _search_loop(query, source, BOOK_KINDS)
+    if author:
+        _author_loop(query, source)
+    else:
+        _search_loop(query, source, BOOK_KINDS)
 
 
 def _search_loop(query: str, source: str | None, kinds: AbstractSet[MediaKind]) -> None:
@@ -81,23 +95,81 @@ def _search_loop(query: str, source: str | None, kinds: AbstractSet[MediaKind]) 
     providers = get_all_providers()
     service = SearchService(providers=providers)
 
+    next_query: str | None = query
+    while next_query:
+        results = service.search(next_query, source=source, kinds=kinds)
+        next_query = _browse_results(results, providers)
+
+
+def _author_loop(query: str, source: str | None) -> None:
+    """Busca `query` como autor y muestra solo los libros de su pagina.
+
+    Si el repo empareja varios autores (lectulandia empareja por substring:
+    "king" trae 34), se elige directo el que coincide exacto con `query`
+    (ver `exact_author_match`) y, si ninguno lo hace, se pregunta cual.
+    Escribir texto en vez de un numero en el listado de libros busca otro
+    autor, igual que `_search_loop` busca otro texto.
+
+    Args:
+        query: Primer autor a buscar.
+        source: Si se da, restringe la busqueda a ese repo unicamente.
+    """
+    providers = get_all_providers()
+    service = SearchService(providers=providers)
+
+    next_query: str | None = query
+    while next_query:
+        authors = service.search_authors(next_query, source=source, kinds=BOOK_KINDS)
+        if not authors:
+            views.show_notice(f"No se encontro ningun autor para '{next_query}'.")
+            next_query = typer.prompt(_AUTHOR_RETRY_PROMPT, default="", show_default=False).strip() or None
+            continue
+
+        picked = _pick_author(authors, next_query)
+        books = service.get_author_books(picked)
+        views.show_notice(f"Libros de {picked.name} ({picked.source}): {len(books)}")
+        next_query = _browse_results(books, providers)
+
+
+def _pick_author(authors: list[Author], query: str) -> Author:
+    """Elige el autor a mostrar: el unico, el exacto, o el que elija el usuario.
+
+    Args:
+        authors: Autores emparejados (al menos uno).
+        query: Texto que escribio el usuario.
+
+    Returns:
+        El autor elegido.
+    """
+    if len(authors) == 1:
+        return authors[0]
+    return exact_author_match(authors, query) or prompts.choose_author(authors)
+
+
+def _browse_results(results: list[Media], providers: dict[str, SourceProvider]) -> str | None:
+    """Muestra `results` paginados y deja descargar hasta que se busca otra cosa.
+
+    Args:
+        results: Resultados a mostrar.
+        providers: Providers registrados (para la portada y la descarga).
+
+    Returns:
+        La proxima query que escribio el usuario, o None si dejo en blanco.
+    """
+
     def fetcher_for(media: Media) -> FetchBytes | None:
         """Cliente HTTP con el que bajar la portada de `media`, si el provider tiene uno."""
         http = getattr(providers.get(media.source), "http", None)
         return (lambda url: http.get(url).content) if http else None
 
-    next_query: str | None = query
-    while next_query:
-        results = service.search(next_query, source=source, kinds=kinds)
-        start = 0
-        while True:
-            start, end = views.show_results(results, fetcher_for=fetcher_for, start=start)
-            action = _prompt_pick_or_search_again(results, start, end, providers)
-            if isinstance(action, _More):
-                start = end
-                continue
-            next_query = action
-            break
+    start = 0
+    while True:
+        start, end = views.show_results(results, fetcher_for=fetcher_for, start=start)
+        action = _prompt_pick_or_search_again(results, start, end, providers)
+        if isinstance(action, _More):
+            start = end
+            continue
+        return action
 
 
 def _prompt_pick_or_search_again(

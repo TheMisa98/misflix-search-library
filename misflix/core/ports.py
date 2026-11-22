@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from misflix.core.models import DownloadOption, Media, MediaKind
+from misflix.core.models import Author, DownloadOption, Media, MediaKind
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -113,6 +113,39 @@ class SeriesProvider(SourceProvider, Protocol):
 
         Returns:
             Opciones de descarga del pack de esa temporada.
+        """
+        ...
+
+
+@runtime_checkable
+class AuthorProvider(SourceProvider, Protocol):
+    """Extension de `SourceProvider` para sources con una pagina propia por autor.
+
+    Separado del contrato base (ISP): solo tiene sentido en sources que
+    exponen esa taxonomia (hoy lectulandia). Se comprueba con
+    `isinstance(provider, AuthorProvider)`, igual que `SeriesProvider`.
+    """
+
+    def search_authors(self, query: str) -> list[Author]:
+        """Autores cuyo nombre coincide con `query`, segun el propio sitio.
+
+        Args:
+            query: Texto de busqueda tal como lo escribio el usuario.
+
+        Returns:
+            Autores emparejados. Vacio si ninguno coincide.
+        """
+        ...
+
+    def get_author_books(self, author: Author) -> list[Media]:
+        """Todos los libros listados en la pagina de `author`.
+
+        Args:
+            author: Autor devuelto por `search_authors`.
+
+        Returns:
+            Libros del autor, solo los de su pagina (sin resultados por
+            texto ni series).
         """
         ...
 

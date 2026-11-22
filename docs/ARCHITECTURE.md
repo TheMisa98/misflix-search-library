@@ -63,6 +63,15 @@ services, or UI:
   the visible page — is taken as a brand new query and fed straight back into another
   `service.search(...)`, so finding the right result doesn't require exiting and
   re-running the command with a different query. Only a blank answer ends the command.
+  `search books --author/--autor/-a "query"` swaps that loop for `_author_loop`: the
+  query is resolved to an author via `SearchService.search_authors` (only providers
+  implementing `AuthorProvider`, see `core/` below), and only that author's own page
+  is listed (`SearchService.get_author_books`) — no text matches, no matched series.
+  When several authors match (lectulandia matches by substring: "king" yields 34),
+  `_pick_author` auto-picks the one whose name equals the query ignoring
+  case/accents/extra spaces (`search_service.exact_author_match`), and otherwise asks
+  via `prompts.choose_author`. Both loops share `_browse_results` (paging + pick +
+  download), so typing text in the author listing searches for another author.
   When a search returns more results than fit on screen, `views.show_results` (see
   below) truncates what it draws but not `results` itself; `_search_loop` keeps the
   full list and a `start` offset across prompts within the same query, and
@@ -184,14 +193,18 @@ services, or UI:
 - **`misflix/core/`** — framework-agnostic domain layer. `models.py` defines `MediaKind`
   (`MOVIE`/`SERIES`/`BOOK`), `Media`, `DownloadOption` (the latter has an
   `opens_externally` flag for sources whose download must be finished by hand in a
-  browser), and `MOVIE_KINDS`/`BOOK_KINDS` (the `frozenset[MediaKind]` pairs that back
+  browser), `Author` (`id`/`name`/`source`/`page_url`, what `AuthorProvider` returns), and `MOVIE_KINDS`/`BOOK_KINDS` (the `frozenset[MediaKind]` pairs that back
   the `movies`/`books` split in both `cli/search.py` and `cli/download.py` — kept in one
   place instead of redefined per CLI module). `ports.py` defines the `Protocol`s:
   `SourceProvider` (`search`/`get_media`/`get_download_options` — every provider),
   `SeriesProvider` (extends `SourceProvider` with `get_seasons`/`get_episodes`/
   `get_season_download_options`; `@runtime_checkable`, so `cli/download.py` narrows to
   it with `isinstance(provider, SeriesProvider)` instead of `getattr`-probing each
-  method by name), and `Downloader` (the `download(url, dest_path, on_progress)`
+  method by name), `AuthorProvider` (extends `SourceProvider` with
+  `search_authors(query) -> list[Author]`/`get_author_books(author) -> list[Media]`,
+  also `@runtime_checkable`; only providers with a per-author page implement it —
+  today lectulandia — and `SearchService.search_authors` skips the rest without
+  calling them), and `Downloader` (the `download(url, dest_path, on_progress)`
   contract `DownloadService` is typed against, instead of the concrete
   `HttpxDownloader`, so the service layer depends on an abstraction rather than a
   specific implementation). `kinds` (a `set[MediaKind]`, e.g.
@@ -289,10 +302,22 @@ services, or UI:
     `infra/antupload.py`) is `DownloadService.download`'s job, not the provider's —
     every option comes back with `opens_externally=False` since none of this needs
     a browser or manual captcha-solving.
+    Author/series pages: when the query matches an author or series, the search
+    results page carries `section.content-current` blocks ("Autores:"/"Series:")
+    linking to `/autor/<slug>/`/`/serie/<slug>/`, which share the search page's
+    `article.card` markup. Plain `search` merges *all* of them (text matches + every
+    matched author + every matched series — verified live: "isaac asimov" pulls in
+    the whole *Isaac Asimov Magazine* series). `search_authors` reads only the
+    "Autores:" block, and `get_author_books` walks only one author's page (following
+    `a.next.page-numbers`) — what backs `search books --author`.
 - **`misflix/infra/`** — technical details behind the ports:
   - `http_client.py` — plain httpx wrapper for sites with no bot protection. Also holds
     `DEFAULT_HEADERS` (the shared User-Agent), imported by `imdb.py`, `antupload.py`,
-    and `mediafire.py` instead of each redefining the same dict.
+    and `mediafire.py` instead of each redefining the same dict. `get` retries
+    transient statuses (429/502/503/504) up to 3 times with exponential backoff
+    (1s, 2s, 4s; `sleep` injectable for tests) — verified live: walking the 9 pages
+    of `/autor/isaac-asimov/` back-to-back got a 503 on the last one, which returned
+    200 when retried a couple of seconds later.
   - `soup.py` — one helper, `attr(tag, name)`: BeautifulSoup's stubs type every
     attribute as `str | list[str]` (an HTML attribute can in theory be multi-valued,
     like `class`), but every attribute this project reads (`href`, `src`, `style`,

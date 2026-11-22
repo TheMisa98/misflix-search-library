@@ -74,3 +74,21 @@ class Media:
     year: int | None = None
     author: str | None = None
     synopsis: str | None = None
+
+
+@dataclass(frozen=True)
+class Author:
+    """Un autor tal como lo expone un repo, con su propia pagina de libros.
+
+    Attributes:
+        id: Identificador dentro de su `source` (ej. el slug de
+            `/autor/<slug>/` en lectulandia).
+        name: Nombre para mostrar.
+        source: Nombre del provider que lo devolvio.
+        page_url: URL de la pagina del autor en el sitio de origen.
+    """
+
+    id: str
+    name: str
+    source: str
+    page_url: str
