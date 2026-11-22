@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 import httpx
 
 # User-Agent de navegador de escritorio comun, compartido por todos los
@@ -17,19 +20,39 @@ DEFAULT_HEADERS = {
 }
 
 
-class HttpClient:
-    """Wrapper delgado sobre httpx con headers y timeouts por defecto."""
+# Status que suelen ser pasajeros (rate limit / sobrecarga del origen) y
+# vale la pena reintentar. Verificado en vivo: recorrer seguido las 9
+# paginas de /autor/isaac-asimov/ en lectulandia devolvio 503 en la novena,
+# y la misma url dio 200 al reintentarla un par de segundos despues.
+_RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 
-    def __init__(self, timeout: float = 15.0):
+
+class HttpClient:
+    """Wrapper delgado sobre httpx con headers, timeouts y reintentos por defecto."""
+
+    def __init__(
+        self,
+        timeout: float = 15.0,
+        retries: int = 3,
+        backoff: float = 1.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         """Inicializa el cliente.
 
         Args:
             timeout: Timeout en segundos para cada request.
+            retries: Reintentos maximos ante un status pasajero (429/5xx de
+                gateway), ademas del intento original.
+            backoff: Espera base en segundos; se duplica en cada reintento.
+            sleep: Funcion de espera (inyectable para tests).
         """
         self._client = httpx.Client(headers=DEFAULT_HEADERS, timeout=timeout, follow_redirects=True)
+        self._retries = retries
+        self._backoff = backoff
+        self._sleep = sleep
 
     def get(self, url: str) -> httpx.Response:
-        """Hace un GET a `url` y valida el status code.
+        """Hace un GET a `url`, reintentando status pasajeros, y valida el status code.
 
         Args:
             url: Url a pedir.
@@ -38,9 +61,15 @@ class HttpClient:
             La respuesta HTTP.
 
         Raises:
-            httpx.HTTPStatusError: Si la respuesta no es 2xx.
+            httpx.HTTPStatusError: Si la respuesta no es 2xx (tras agotar
+                los reintentos, si el status era reintentable).
         """
         response = self._client.get(url)
+        for attempt in range(self._retries):
+            if response.status_code not in _RETRYABLE_STATUSES:
+                break
+            self._sleep(self._backoff * 2**attempt)
+            response = self._client.get(url)
         response.raise_for_status()
         return response
 

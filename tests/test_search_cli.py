@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import pytest
 import typer
 
 from misflix.cli import search
-from misflix.core.models import Media, MediaKind
+from misflix.core.models import Author, Media, MediaKind
 
 
 def make_result(source: str, media_id: str, title: str) -> Media:
@@ -78,3 +79,29 @@ def test_mas_is_treated_as_a_new_query_when_theres_no_next_page(monkeypatch):
     _queue_inputs(monkeypatch, ["mas"])
 
     assert search._prompt_pick_or_search_again(results, 0, 1, {}) == "mas"
+
+
+def make_author(name: str) -> Author:
+    slug = name.lower().replace(" ", "-")
+    return Author(id=slug, name=name, source="lectulandia", page_url=f"http://example.com/autor/{slug}/")
+
+
+def test_pick_author_returns_the_only_match_without_asking(monkeypatch):
+    monkeypatch.setattr(search.prompts, "choose_author", lambda authors: pytest.fail("no deberia preguntar"))
+    only = make_author("Peter Watts")
+
+    assert search._pick_author([only], "watts") == only
+
+
+def test_pick_author_prefers_the_exact_match_without_asking(monkeypatch):
+    monkeypatch.setattr(search.prompts, "choose_author", lambda authors: pytest.fail("no deberia preguntar"))
+    authors = [make_author("Stephen W. Hawking"), make_author("Stephen King")]
+
+    assert search._pick_author(authors, "stephen king") == authors[1]
+
+
+def test_pick_author_asks_when_several_match_and_none_is_exact(monkeypatch):
+    authors = [make_author("Isaac Asimov"), make_author("Janet Asimov")]
+    monkeypatch.setattr(search.prompts, "choose_author", lambda options: options[1])
+
+    assert search._pick_author(authors, "asimov") == authors[1]

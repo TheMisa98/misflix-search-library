@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from misflix.core.models import Media, MediaKind
-from misflix.core.services.search_service import SearchService
+from misflix.core.models import Author, Media, MediaKind
+from misflix.core.services.search_service import SearchService, exact_author_match
 
 
 class FakeProvider:
@@ -109,3 +109,80 @@ def test_search_still_queries_providers_without_a_declared_kinds_attribute():
 
     assert provider.queries == ["query"]
     assert results == []
+
+
+class FakeAuthorProvider(FakeProvider):
+    def __init__(self, name: str, authors: list[Author], books: list[Media]):
+        super().__init__(name, [])
+        self.kinds = {MediaKind.BOOK}
+        self._authors = authors
+        self._books = books
+        self.author_queries: list[str] = []
+        self.requested_authors: list[Author] = []
+
+    def search_authors(self, query: str) -> list[Author]:
+        self.author_queries.append(query)
+        return self._authors
+
+    def get_author_books(self, author: Author) -> list[Media]:
+        self.requested_authors.append(author)
+        return self._books
+
+
+def make_author(name: str, source: str = "lectulandia") -> Author:
+    slug = name.lower().replace(" ", "-")
+    return Author(id=slug, name=name, source=source, page_url=f"http://example.com/autor/{slug}/")
+
+
+def test_search_authors_only_queries_providers_that_expose_authors():
+    plain = FakeProvider("plain", [])
+    plain.kinds = {MediaKind.BOOK}
+    author_provider = FakeAuthorProvider("lectulandia", [make_author("Isaac Asimov")], [])
+    service = SearchService(providers={"plain": plain, "lectulandia": author_provider})
+
+    authors = service.search_authors("asimov", kinds={MediaKind.BOOK})
+
+    assert [a.name for a in authors] == ["Isaac Asimov"]
+    assert author_provider.author_queries == ["asimov"]
+    assert plain.queries == []
+
+
+def test_search_authors_skips_providers_whose_declared_kinds_dont_match():
+    author_provider = FakeAuthorProvider("lectulandia", [make_author("Isaac Asimov")], [])
+    service = SearchService(providers={"lectulandia": author_provider})
+
+    assert service.search_authors("asimov", kinds={MediaKind.MOVIE}) == []
+    assert author_provider.author_queries == []
+
+
+def test_get_author_books_delegates_to_the_authors_provider():
+    author = make_author("Isaac Asimov")
+    books = [make_media("Yo, robot", "lectulandia", kind=MediaKind.BOOK)]
+    author_provider = FakeAuthorProvider("lectulandia", [author], books)
+    service = SearchService(providers={"lectulandia": author_provider})
+
+    assert service.get_author_books(author) == books
+    assert author_provider.requested_authors == [author]
+
+
+def test_get_author_books_rejects_a_provider_without_author_pages():
+    service = SearchService(providers={"plain": FakeProvider("plain", [])})
+
+    with pytest.raises(TypeError):
+        service.get_author_books(make_author("Isaac Asimov", source="plain"))
+
+
+def test_exact_author_match_ignores_case_accents_and_extra_spaces():
+    authors = [make_author("Stephen W. Hawking"), make_author("Stephen King"), make_author("Tabitha King")]
+
+    assert exact_author_match(authors, "  stephen   KING ") == authors[1]
+    assert exact_author_match([make_author("Gabriel García Márquez")], "gabriel garcia marquez") is not None
+
+
+def test_exact_author_match_returns_none_without_a_single_exact_match():
+    authors = [make_author("Isaac Asimov"), make_author("Janet Asimov")]
+
+    assert exact_author_match(authors, "asimov") is None
+    assert (
+        exact_author_match([make_author("Isaac Asimov", "a"), make_author("Isaac Asimov", "b")], "isaac asimov") is None
+    )

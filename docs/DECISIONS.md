@@ -110,3 +110,27 @@ correr Actions genere costo — no tiene sentido pagar por una comprobacion que 
 de pre-push local ya cubre en cada push. Las comprobaciones quedan solo en local, via
 `.githooks/pre-push` (ver `docs/GIT_WORKFLOW.md` § Pre-push hook). No proponer CI de
 nuevo salvo que el usuario indique que la situacion de facturacion cambio.
+
+## 2026-11-21 — Búsqueda solo por autor como modo aparte (`search books --author`), no como filtro
+
+La búsqueda normal de lectulandia mezcla resultados por texto + libros de todo autor
+emparejado + libros de toda serie emparejada, así que explorar un autor puntual trae
+mucho ruido ("isaac asimov" incluye toda la serie *Isaac Asimov Magazine*; "asimov"
+incluye a Janet Asimov). Se agregó un modo aparte que lista solo la página del autor
+(`/autor/<slug>/`), que el sitio ya expone, en vez de filtrar los resultados por texto
+por el campo `author` (descartado: los resultados por texto son solo la primera página
+de la búsqueda y no traen todos los libros del autor; la página del autor sí).
+**Contrato**: un `Protocol` nuevo `AuthorProvider` en `core/ports.py` que extiende
+`SourceProvider` (ISP — igual que `SeriesProvider`, un provider de películas no tiene
+por qué implementarlo). **Varios autores emparejados**: el sitio empareja por substring
+("king" → 34 autores), así que se elige directo el que coincide exacto con la query
+(sin mayúsculas/acentos) y si no, se pregunta — en vez de mezclar los libros de todos.
+
+## 2026-11-21 — Reintentos ante 429/5xx pasajeros en `HttpClient`
+
+Verificado en vivo: recorrer seguido las páginas de un autor largo en lectulandia dio un
+503 que al reintentar a los pocos segundos devolvía 200. `HttpClient.get` reintenta
+429/502/503/504 hasta 3 veces con backoff exponencial (1s, 2s, 4s). Se hizo en el
+cliente HTTP (y no en el provider) porque beneficia a todo `StaticProvider` y no
+cambia ningún contrato. Sin dependencia nueva (descartado `tenacity` u otra lib de
+retry: el bucle es de 5 líneas).

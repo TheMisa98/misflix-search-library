@@ -69,3 +69,12 @@ def show_results(results: list[Media], fetcher_for: FetcherFor | None = None, st
             )
         )
     return (start, end)
+
+
+def show_notice(text: str) -> None:
+    """Muestra un aviso corto (ej. "no se encontro ningun autor").
+
+    Args:
+        text: Texto del aviso.
+    """
+    console.print(Panel(text, border_style="yellow", expand=False))

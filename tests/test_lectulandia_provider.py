@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from misflix.core.models import MediaKind
+from misflix.core.models import Author, MediaKind
 from misflix.providers.lectulandia import LectulandiaProvider
 
 FIXTURES = Path(__file__).parent / "fixtures" / "lectulandia"
@@ -154,3 +154,60 @@ def test_get_download_options_do_not_open_externally():
     options = provider.get_download_options(media)
 
     assert all(o.opens_externally is False for o in options)
+
+
+def test_search_authors_returns_only_the_matched_authors_not_the_series():
+    html = (FIXTURES / "search_results_with_authors_and_series.html").read_text()
+    client = FakeHttpClient(html)
+    provider = LectulandiaProvider(http_client=client)
+
+    authors = provider.search_authors("asimov")
+
+    assert authors == [
+        Author(
+            id="isaac-asimov",
+            name="Isaac Asimov",
+            source="lectulandia",
+            page_url="https://ww3.lectulandia.com/autor/isaac-asimov/",
+        ),
+        Author(
+            id="janet-asimov",
+            name="Janet Asimov",
+            source="lectulandia",
+            page_url="https://ww3.lectulandia.com/autor/janet-asimov/",
+        ),
+    ]
+    # Solo la pagina de busqueda: no sigue ni autores ni series por su cuenta.
+    assert client.requested_urls == ["https://ww3.lectulandia.com/search/asimov"]
+
+
+def test_search_authors_without_a_matched_author_returns_nothing():
+    html = (FIXTURES / "search_results.html").read_text()
+    provider = LectulandiaProvider(http_client=FakeHttpClient(html))
+
+    assert provider.search_authors("dune") == []
+
+
+def test_get_author_books_returns_only_the_author_page_with_pagination():
+    client = FakeMultiPageHttpClient(
+        {
+            "https://ww3.lectulandia.com/autor/peter-watts/": (FIXTURES / "author_page.html").read_text(),
+            "https://ww3.lectulandia.com/autor/peter-watts/page/2/": (FIXTURES / "author_page_2.html").read_text(),
+        }
+    )
+    provider = LectulandiaProvider(http_client=client)
+    author = Author(
+        id="peter-watts",
+        name="Peter Watts",
+        source="lectulandia",
+        page_url="https://ww3.lectulandia.com/autor/peter-watts/",
+    )
+
+    books = provider.get_author_books(author)
+
+    assert [b.title for b in books] == ["Tiempo profundo", "Ad Astra", "Visión ciega"]
+    assert all(b.kind == MediaKind.BOOK for b in books)
+    assert client.requested_urls == [
+        "https://ww3.lectulandia.com/autor/peter-watts/",
+        "https://ww3.lectulandia.com/autor/peter-watts/page/2/",
+    ]
