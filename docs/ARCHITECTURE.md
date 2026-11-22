@@ -483,20 +483,33 @@ por episodio) — ver `docs/DECISIONS.md`.
    `und` tituladas "Latino"/"Inglés" (`core/subtitles/media.py`).
    Si los metadatos no lo dicen, antes de leer el video entero se **escucha y se
    mira** (`infra/spanish_detection.py`, `core/subtitles/detection.py`, cacheado
-   en la tabla `detections`): Whisper (`whisper-cpp`, modelo multilingüe "base",
-   que se baja solo la primera vez a `cache_dir/subs/whisper/`) identifica el
-   idioma hablado en 3 fragmentos de 25s de cada pista (mayoría estricta), y
-   Tesseract (`-l spa`) lee la franja inferior de hasta 14 fotogramas buscando
-   subtítulos quemados. **Verificado en vivo**: *The Aviator* tiene una sola
-   pista sin idioma que está doblada, y *Kimetsu no Yaiba* T3 tiene el audio
-   `jpn` bien etiquetado pero los subtítulos en español dibujados en la imagen
-   — ninguno de los dos se podía distinguir por metadatos. Los fragmentos y
-   fotogramas se buscan con `-ss` antes de `-i` (no se lee el archivo entero);
-   los fotogramas se decodifican con `-hwaccel auto` (la GPU si el driver lo
-   soporta: con `mesa-va-drivers` de Fedora VAAPI no decodifica H.264/HEVC y
-   ffmpeg vuelve solo a la CPU — hace falta `mesa-va-drivers-freeworld`). Sin
-   esas herramientas la detección se saltea; si se instalan después, los
-   videos evaluados sin ellas se reevalúan (columna `detected`).
+   en la tabla `detections`):
+   - **Whisper**, solo sobre pistas de audio **sin etiqueta de idioma** (a un
+     `eng`/`jpn` se le cree). Fedora empaqueta whisper.cpp solo como librería
+     (`libwhisper.so`, sin CLI — verificado en vivo), así que se llama con
+     `ctypes` desde `infra/whisper_lid.py`, **en un proceso aparte y en CPU**:
+     el backend HIP del paquete tira SIGFPE en la RX 5700 XT (gfx1010, sin
+     soporte de ROCm) y con `HSA_OVERRIDE_GFX_VERSION` se cuelga. Modelo
+     multilingüe "base" (se baja una vez a `cache_dir/subs/whisper/`), ~10s por
+     fragmento de 25s (la librería de Fedora no usa AVX2). Empieza con 2
+     fragmentos y agrega de a uno hasta 5; gana el idioma con ≥2 votos
+     confiables (p ≥ 0.75) y sin empate — en tramos sin diálogo Whisper
+     "alucina" idiomas (Kill the Jockey: japonés al 88% sobre música).
+   - **Tesseract** (`-l spa`, salida TSV, solo palabras con confianza ≥ 60) sobre
+     la franja inferior central de hasta 20 fotogramas, binarizada (texto claro
+     → negro), cortando apenas hay texto suficiente.
+
+   **Verificado en vivo** sobre los 15 videos de la biblioteca sin subtítulo de
+   referencia y con audio estéreo: Kimetsu no Yaiba T3 (10 episodios, audio
+   `jpn` bien etiquetado) → subtítulos en español quemados; The Aviator, Osmosis
+   Jones, Project Almanac, Ratatouille (pistas sin idioma) → doblados; Kill the
+   Jockey → hablada en español. Controles: House S01E01 y Tokyo Godfathers →
+   necesitan subtítulos. Los fragmentos y fotogramas se buscan con `-ss` antes
+   de `-i` (no se lee el archivo entero); los fotogramas se decodifican con
+   `-hwaccel auto` (con `mesa-va-drivers` de Fedora VAAPI no decodifica
+   H.264/HEVC y ffmpeg vuelve solo a la CPU). Sin esas herramientas la detección
+   se saltea; si se instalan después, los videos evaluados sin ellas se
+   reevalúan (columna `detected`).
 2. **Referencia de sincronía**, extraída en una sola lectura del archivo con
    `ffmpeg -vn` (nunca decodifica video: no hay trabajo para la GPU) y cacheada en
    `cache_dir/subs/referencias/`:

@@ -18,13 +18,30 @@ def test_parse_whisper_language_reads_the_auto_detected_line():
     assert parse_whisper_language("sin deteccion") is None
 
 
-def test_spoken_language_needs_a_strict_majority_of_confident_clips():
-    es, en, music = LanguageGuess("es", 0.95), LanguageGuess("en", 0.9), LanguageGuess("nn", 0.2)
+def test_spoken_language_needs_two_confident_votes_and_no_tie():
+    es, en, unsure = LanguageGuess("es", 0.95), LanguageGuess("en", 0.9), LanguageGuess("en", 0.4)
 
+    assert spoken_language([es, es]) == "es"
     assert spoken_language([es, es, en]) == "es"
-    assert spoken_language([es, music, music]) is None  # un fragmento no alcanza
+    assert spoken_language([es]) is None  # un fragmento no alcanza
     assert spoken_language([es, en]) is None
-    assert spoken_language([music]) is None
+    assert spoken_language([es, unsure, unsure]) is None
+    assert spoken_language([es, es, en, en]) is None  # empate
+    assert spoken_language([es, es, en, LanguageGuess("ja", 0.9)]) == "es"  # pluralidad
+
+
+def test_spoken_language_ignores_hallucinations_on_clips_without_dialogue():
+    # Kill the Jockey, verificado en vivo: musica/ambiente en 3 de 5 fragmentos
+    guesses = [
+        LanguageGuess("ja", 0.878),
+        LanguageGuess("en", 0.673),
+        LanguageGuess("en", 0.366),
+        LanguageGuess("es", 0.897),
+        LanguageGuess("es", 0.852),
+    ]
+
+    assert spoken_language(guesses) == "es"
+    assert spoken_language(guesses[:3]) is None  # sin los fragmentos con dialogo todavia no decide
 
 
 def test_burned_subtitle_language_from_ocr_text():

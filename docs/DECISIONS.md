@@ -210,15 +210,28 @@ necesita red.
 Los metadatos no alcanzan (verificado en vivo): *The Aviator* trae una sola pista de
 audio sin idioma que está doblada, y *Kimetsu no Yaiba* T3 trae audio `jpn` bien
 etiquetado con subtítulos en español dibujados en la imagen. Sin esto el gestor les
-bajaba subtítulos que no hacían falta. **Elegido**: dos herramientas del sistema, de
-los repos oficiales de Fedora (como `ffmpeg`/`unrar`, nada de pip): `whisper-cpp`
-para identificar el idioma hablado (modelo multilingüe "base", ~148MB, que se baja
-una vez de Hugging Face a la caché) y `tesseract` + `tesseract-langpack-spa` para
-leer la franja inferior de algunos fotogramas. **Descartados**: `openai-whisper`
-(arrastra PyTorch, varios GB) y `faster-whisper` (CTranslate2, sin GPU AMD).
-Corre *antes* de la lectura completa del video (la parte cara), sobre fragmentos y
-fotogramas sueltos con búsqueda directa, y se cachea. Si falta una herramienta, esa
+bajaba subtítulos que no hacían falta. **Elegido**: paquetes de los repos oficiales de
+Fedora (como `ffmpeg`/`unrar`, nada de pip): `whisper-cpp` para identificar el idioma
+hablado y `tesseract` + `tesseract-langpack-spa` para leer la franja inferior de algunos
+fotogramas. El paquete `whisper-cpp` de Fedora trae solo la librería (`libwhisper.so`,
+sin CLI), así que se usa con `ctypes` (stdlib) en un proceso aparte, con el modelo
+multilingüe "base" (~148MB, se baja una vez de Hugging Face a la caché).
+**Descartados**: `openai-whisper` (arrastra PyTorch, varios GB), `faster-whisper`
+(CTranslate2, sin GPU AMD) y compilar whisper.cpp a mano. Whisper solo escucha pistas
+**sin** etiqueta de idioma (en CPU cuesta ~10s por fragmento; a un `eng`/`jpn` se le
+cree). Corre *antes* de la lectura completa del video (la parte cara), sobre fragmentos
+y fotogramas sueltos con búsqueda directa, y se cachea. Si falta una herramienta, esa
 detección se saltea y el video se reevalúa cuando aparece.
+
+## 2026-11-22 — Whisper en CPU: el backend HIP no sirve en la RX 5700 XT
+
+**Verificado en vivo**: el `whisper-cpp` de Fedora viene compilado con HIP (ROCm). En
+la RX 5700 XT (gfx1010, RDNA1, sin soporte oficial de ROCm) el cómputo tira SIGFPE; con
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` se cuelga (más de 10 minutos sin responder). Por eso
+`whisper_lid.py` corre en un proceso aparte con `ROCR_VISIBLE_DEVICES=-1`/
+`HIP_VISIBLE_DEVICES=-1`: en CPU da los mismos idiomas (The Aviator español 93-98%, House
+inglés 95-99.8%, Kimetsu japonés 97-99%) a ~10s por fragmento, y si algún día la
+librería nativa falla, se cae ese proceso y no el daemon.
 
 ## 2026-11-22 — GPU: aceleración por hardware donde hay video que decodificar
 
