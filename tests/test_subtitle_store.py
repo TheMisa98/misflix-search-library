@@ -51,3 +51,36 @@ def test_attempts_searches_and_actions(tmp_path):
     assert store.cached_search("subdivx", "otra", timedelta(days=1)) is None
     action = store.recent_actions()[0]
     assert (action.action, action.file, action.backup) == ("respaldado", "/v.srt", "/bk/v.srt")
+
+
+def test_old_databases_get_the_detected_column(tmp_path):
+    import sqlite3
+    from contextlib import closing
+
+    path = tmp_path / "subs.db"
+    with closing(sqlite3.connect(path)) as conn, conn:  # esquema anterior a la columna `detected`
+        conn.execute(
+            "CREATE TABLE videos (path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime REAL NOT NULL, "
+            "status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', subtitle_path TEXT, reference TEXT, score REAL, "
+            "updated_at TEXT NOT NULL, retry_after TEXT, sidecars TEXT NOT NULL DEFAULT '')"
+        )
+        conn.execute("INSERT INTO videos (path, size, mtime, status, updated_at) VALUES ('/v.mkv', 1, 2.0, 'ok', 'x')")
+
+    store = SubtitleStore(path)
+
+    record = store.get_video(Path("/v.mkv"))
+    assert record is not None and record.status == "ok" and record.detected == ""
+
+
+def test_detection_cache_round_trip(tmp_path):
+    from misflix.infra.spanish_detection import SpanishDetection
+
+    store = SubtitleStore(tmp_path / "subs.db")
+    detection = SpanishDetection(
+        audio_languages={1: "es", 2: None}, burned_language="es", tools=frozenset({"voz", "ocr"})
+    )
+
+    store.put_detection(Path("/v.mkv"), 10, 1.0, detection)
+
+    assert store.get_detection(Path("/v.mkv"), 10, 1.0) == detection
+    assert store.get_detection(Path("/v.mkv"), 11, 1.0) is None

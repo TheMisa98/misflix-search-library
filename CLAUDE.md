@@ -23,7 +23,9 @@ mensaje o de los comentarios del código.
 
 Requiere terminal **Kitty** (`kitten` en `PATH`) para renderizar portadas — ver
 `docs/ARCHITECTURE.md` § `ui/`. `misflix subs` además usa `ffprobe`/`ffmpeg` y
-`unrar` del sistema (ver `docs/ARCHITECTURE.md` § Subtítulos).
+`unrar` del sistema, y opcionalmente `whisper-cpp` y `tesseract` +
+`tesseract-langpack-spa` para detectar doblajes/subtítulos quemados (ver
+`docs/ARCHITECTURE.md` § Subtítulos).
 
 ## Arquitectura: monolito modular en capas
 

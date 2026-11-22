@@ -15,6 +15,7 @@ STATUS_LABELS: dict[str, tuple[str, str]] = {
     "audio_es": ("Tiene doblaje en español", "dim"),
     "sub_es_incrustado": ("Trae subtítulos en español incrustados", "dim"),
     "release_es": ("El nombre indica español (doblado/subtitulado)", "dim"),
+    "subs_quemados": ("Subtítulos en español quemados en la imagen", "dim"),
     "ok": ("Subtítulo existente verificado", "green"),
     "corregido": ("Subtítulo existente resincronizado", "green"),
     "descargado": ("Subtítulo bajado y verificado", "green"),

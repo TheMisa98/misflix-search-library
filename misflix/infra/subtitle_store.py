@@ -32,6 +32,7 @@ from pathlib import Path
 
 from misflix.core.models import SubtitleCandidate
 from misflix.core.subtitles.media import MediaInfo, StreamInfo
+from misflix.infra.spanish_detection import SpanishDetection
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -45,7 +46,16 @@ CREATE TABLE IF NOT EXISTS videos (
     score REAL,
     updated_at TEXT NOT NULL,
     retry_after TEXT,
-    sidecars TEXT NOT NULL DEFAULT ''
+    sidecars TEXT NOT NULL DEFAULT '',
+    detected TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS detections (
+    path TEXT PRIMARY KEY,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,
+    tools TEXT NOT NULL,
+    audio_languages TEXT NOT NULL,
+    burned_language TEXT
 );
 CREATE TABLE IF NOT EXISTS probes (
     path TEXT PRIMARY KEY,
@@ -100,6 +110,9 @@ class VideoRecord:
         sidecars: Firma de los .srt que habia al lado del video al evaluarlo
             (si cambia, por ejemplo porque el usuario agrego uno a mano, el
             video se reevalua).
+        detected: Detecciones de español que se pudieron correr al evaluarlo
+            ("ocr,voz"); si despues se instala una herramienta que faltaba,
+            el video se reevalua.
     """
 
     path: str
@@ -113,6 +126,7 @@ class VideoRecord:
     updated_at: str = ""
     retry_after: str | None = None
     sidecars: str = ""
+    detected: str = ""
 
 
 @dataclass(frozen=True)
@@ -149,6 +163,10 @@ class SubtitleStore:
         self.path = path
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # bases creadas antes de existir la columna `detected`
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+            if "detected" not in columns:
+                conn.execute("ALTER TABLE videos ADD COLUMN detected TEXT NOT NULL DEFAULT ''")
 
     def get_probe(self, path: Path, size: int, mtime: float) -> MediaInfo | None:
         """Salida de ffprobe cacheada de `path`, si el archivo no cambio desde entonces.
@@ -187,6 +205,53 @@ class SubtitleStore:
             conn.execute(
                 "INSERT OR REPLACE INTO probes (path, size, mtime, info) VALUES (?, ?, ?, ?)",
                 (str(path), size, mtime, json.dumps(asdict(info))),
+            )
+
+    def get_detection(self, path: Path, size: int, mtime: float) -> SpanishDetection | None:
+        """Deteccion de español cacheada de `path`, si el archivo no cambio desde entonces.
+
+        Args:
+            path: Video.
+            size: Tamaño actual.
+            mtime: mtime actual.
+
+        Returns:
+            La deteccion cacheada, o None.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT tools, audio_languages, burned_language FROM detections"
+                " WHERE path = ? AND size = ? AND mtime = ?",
+                (str(path), size, mtime),
+            ).fetchone()
+        if row is None:
+            return None
+        return SpanishDetection(
+            audio_languages={int(index): language for index, language in json.loads(row[1]).items()},
+            burned_language=row[2],
+            tools=frozenset(filter(None, row[0].split(","))),
+        )
+
+    def put_detection(self, path: Path, size: int, mtime: float, detection: SpanishDetection) -> None:
+        """Cachea la deteccion de español de `path`.
+
+        Args:
+            path: Video.
+            size: Tamaño actual.
+            mtime: mtime actual.
+            detection: Resultado a guardar.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO detections VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    str(path),
+                    size,
+                    mtime,
+                    ",".join(sorted(detection.tools)),
+                    json.dumps(detection.audio_languages),
+                    detection.burned_language,
+                ),
             )
 
     def get_video(self, path: Path) -> VideoRecord | None:
@@ -356,7 +421,9 @@ class SubtitleStore:
             conn.close()
 
 
-_VIDEO_COLUMNS = "path, size, mtime, status, detail, subtitle_path, reference, score, updated_at, retry_after, sidecars"
+_VIDEO_COLUMNS = (
+    "path, size, mtime, status, detail, subtitle_path, reference, score, updated_at, retry_after, sidecars, detected"
+)
 
 
 def _now() -> str:

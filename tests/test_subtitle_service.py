@@ -15,6 +15,7 @@ from misflix.core.subtitles.srt import Cue, format_srt, parse_srt
 from misflix.infra import library
 from misflix.infra.cloudflare import CloudflareBlockedError
 from misflix.infra.media_probe import ExtractedReference, MediaProbeError
+from misflix.infra.spanish_detection import SpanishDetection
 from misflix.infra.subtitle_store import SubtitleStore, VideoRecord
 from tests.test_subtitles_sync import make_timeline
 
@@ -79,6 +80,22 @@ class FakeProvider:
         return DownloadedFile(filename=f"{candidate.id}.zip", content=self.files[candidate.id][1])
 
 
+class FakeDetector:
+    def __init__(self, audio: str | None = None, burned: str | None = None, tools=frozenset({"voz", "ocr"})):
+        self.tools = frozenset(tools)
+        self.audio = audio
+        self.burned = burned
+        self.calls = 0
+
+    def detect(self, video: Path, info: MediaInfo) -> SpanishDetection:
+        self.calls += 1
+        return SpanishDetection(
+            audio_languages={1: self.audio} if "voz" in self.tools else {},
+            burned_language=self.burned if "ocr" in self.tools else None,
+            tools=self.tools,
+        )
+
+
 def candidate(id_: str, title: str = "House M.D. S01E01", description: str = "", downloads: int = 10):
     return SubtitleCandidate(id=id_, source="fake", title=title, description=description, downloads=downloads)
 
@@ -120,9 +137,11 @@ def lib(tmp_path, monkeypatch):
         extract_calls = extractions
 
         @staticmethod
-        def service(provider: FakeProvider | None = None) -> SubtitleService:
+        def service(provider: FakeProvider | None = None, detector: FakeDetector | None = None) -> SubtitleService:
             store = SubtitleStore(tmp_path / "state" / "subs.db")
-            return SubtitleService(provider or FakeProvider(), store, tmp_path / "cache", tmp_path / "respaldo")
+            return SubtitleService(
+                provider or FakeProvider(), store, tmp_path / "cache", tmp_path / "respaldo", detector=detector
+            )
 
         @staticmethod
         def run(service: SubtitleService, **kwargs):
@@ -304,3 +323,45 @@ def test_reference_falls_back_to_the_subtitle_when_the_audio_cannot_be_decoded(l
 
     assert calls == [True, False]
     assert summary.by_status == {SubtitleStatus.IN_SYNC: 1}
+
+
+def test_untagged_dub_detected_by_listening_is_skipped_before_reading_the_whole_video(lib):
+    detector = FakeDetector(audio="es")
+    service = lib.service(detector=detector)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.SPANISH_AUDIO: 1}
+    assert lib.extract_calls == []  # no hizo falta leer el video entero
+
+
+def test_burned_in_spanish_subtitles_are_skipped(lib):
+    service = lib.service(FakeProvider(), detector=FakeDetector(audio="ja", burned="es"))
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.SPANISH_BURNED: 1}
+    assert lib.extract_calls == []
+
+
+def test_detection_is_cached_between_runs(lib):
+    detector = FakeDetector(audio="en")
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))
+    service = lib.service(detector=detector)
+
+    lib.run(service, force=True)
+    lib.run(service, force=True)
+
+    assert detector.calls == 1
+
+
+def test_videos_are_re_evaluated_when_a_missing_detection_tool_gets_installed(lib):
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))
+    without_ocr = lib.service(detector=FakeDetector(audio="en", tools={"voz"}))
+    lib.run(without_ocr)
+    assert not without_ocr.needs_work(_video(lib))
+
+    with_ocr = lib.service(detector=FakeDetector(audio="en", burned="es"))
+    summary = lib.run(with_ocr)
+
+    assert summary.by_status == {SubtitleStatus.SPANISH_BURNED: 1}

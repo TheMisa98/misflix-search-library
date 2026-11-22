@@ -204,3 +204,28 @@ trabajo es casi gratis) del video más nuevo al más viejo. Si subdivx queda blo
 por Cloudflare (nadie resolvió el captcha), no reabre el navegador en cada pasada:
 espera 1h, 2h, 4h… hasta 8h, y mientras tanto sigue verificando/corrigiendo lo que no
 necesita red.
+
+## 2026-11-22 — Detectar doblajes y subtítulos quemados escuchando y leyendo el video
+
+Los metadatos no alcanzan (verificado en vivo): *The Aviator* trae una sola pista de
+audio sin idioma que está doblada, y *Kimetsu no Yaiba* T3 trae audio `jpn` bien
+etiquetado con subtítulos en español dibujados en la imagen. Sin esto el gestor les
+bajaba subtítulos que no hacían falta. **Elegido**: dos herramientas del sistema, de
+los repos oficiales de Fedora (como `ffmpeg`/`unrar`, nada de pip): `whisper-cpp`
+para identificar el idioma hablado (modelo multilingüe "base", ~148MB, que se baja
+una vez de Hugging Face a la caché) y `tesseract` + `tesseract-langpack-spa` para
+leer la franja inferior de algunos fotogramas. **Descartados**: `openai-whisper`
+(arrastra PyTorch, varios GB) y `faster-whisper` (CTranslate2, sin GPU AMD).
+Corre *antes* de la lectura completa del video (la parte cara), sobre fragmentos y
+fotogramas sueltos con búsqueda directa, y se cachea. Si falta una herramienta, esa
+detección se saltea y el video se reevalúa cuando aparece.
+
+## 2026-11-22 — GPU: aceleración por hardware donde hay video que decodificar
+
+Pedido del usuario: usar la GPU para todo lo que sea decodificar video. Lo único que
+decodifica imagen es la lectura de fotogramas para el OCR, que usa
+`-hwaccel auto` (la GPU si el driver la soporta, si no la CPU, sin fallar). La
+sincronía nunca decodifica video (`ffmpeg -vn`). **Verificado en vivo**: con el
+`mesa-va-drivers` de Fedora, VAAPI en la RX 5600/5700 no decodifica H.264 ("No
+support for codec h264 profile 100") — hace falta `mesa-va-drivers-freeworld` de
+RPM Fusion; para unos pocos fotogramas por video la diferencia es chica.

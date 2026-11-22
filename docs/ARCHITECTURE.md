@@ -481,6 +481,22 @@ por episodio) — ver `docs/DECISIONS.md`.
    ("CASTELLANO", "SUBTITULADO ESPAÑOL", "DUAL"). El idioma de una pista sale del
    tag **o del título**: verificado en vivo, en The Big Bang Theory hay pistas
    `und` tituladas "Latino"/"Inglés" (`core/subtitles/media.py`).
+   Si los metadatos no lo dicen, antes de leer el video entero se **escucha y se
+   mira** (`infra/spanish_detection.py`, `core/subtitles/detection.py`, cacheado
+   en la tabla `detections`): Whisper (`whisper-cpp`, modelo multilingüe "base",
+   que se baja solo la primera vez a `cache_dir/subs/whisper/`) identifica el
+   idioma hablado en 3 fragmentos de 25s de cada pista (mayoría estricta), y
+   Tesseract (`-l spa`) lee la franja inferior de hasta 14 fotogramas buscando
+   subtítulos quemados. **Verificado en vivo**: *The Aviator* tiene una sola
+   pista sin idioma que está doblada, y *Kimetsu no Yaiba* T3 tiene el audio
+   `jpn` bien etiquetado pero los subtítulos en español dibujados en la imagen
+   — ninguno de los dos se podía distinguir por metadatos. Los fragmentos y
+   fotogramas se buscan con `-ss` antes de `-i` (no se lee el archivo entero);
+   los fotogramas se decodifican con `-hwaccel auto` (la GPU si el driver lo
+   soporta: con `mesa-va-drivers` de Fedora VAAPI no decodifica H.264/HEVC y
+   ffmpeg vuelve solo a la CPU — hace falta `mesa-va-drivers-freeworld`). Sin
+   esas herramientas la detección se saltea; si se instalan después, los
+   videos evaluados sin ellas se reevalúan (columna `detected`).
 2. **Referencia de sincronía**, extraída en una sola lectura del archivo con
    `ffmpeg -vn` (nunca decodifica video: no hay trabajo para la GPU) y cacheada en
    `cache_dir/subs/referencias/`:

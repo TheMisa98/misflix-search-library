@@ -151,8 +151,21 @@ def detect_language(cues: Sequence[Cue]) -> str | None:
         Codigo ISO 639-1 (`es`, `en`, `pt`, `fr`, `it`, `de`), o None si
         hay muy poco texto o ningun idioma se destaca.
     """
-    words = _WORD_RE.findall(" ".join(plain_text(cue.text) for cue in cues).lower())
-    if len(words) < _MIN_WORDS_FOR_LANGUAGE:
+    return detect_text_language(" ".join(plain_text(cue.text) for cue in cues))
+
+
+def detect_text_language(text: str, min_words: int = _MIN_WORDS_FOR_LANGUAGE) -> str | None:
+    """Adivina el idioma de un texto libre contando palabras frecuentes.
+
+    Args:
+        text: Texto (ej. lo que el OCR leyo en los fotogramas de un video).
+        min_words: Minimo de palabras para animarse a decidir.
+
+    Returns:
+        Codigo ISO 639-1, o None si hay muy poco texto o ningun idioma se destaca.
+    """
+    words = _WORD_RE.findall(text.lower())
+    if len(words) < min_words:
         return None
     ratios = {lang: sum(word in stopwords for word in words) / len(words) for lang, stopwords in _STOPWORDS.items()}
     best = max(ratios, key=lambda lang: ratios[lang])

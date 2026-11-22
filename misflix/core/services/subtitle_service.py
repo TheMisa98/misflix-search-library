@@ -60,6 +60,7 @@ from misflix.infra.media_probe import (
     probe,
 )
 from misflix.infra.notify import notify
+from misflix.infra.spanish_detection import SpanishDetection, SpanishDetector
 from misflix.infra.subtitle_store import ActionRecord, SubtitleStore, VideoRecord
 
 # Re-exportados para `cli/` (que no importa `infra/`, ver CLAUDE.md).
@@ -96,6 +97,7 @@ class SubtitleStatus(StrEnum):
     SPANISH_AUDIO = "audio_es"
     SPANISH_TRACK = "sub_es_incrustado"
     SPANISH_RELEASE = "release_es"
+    SPANISH_BURNED = "subs_quemados"
     IN_SYNC = "ok"
     FIXED = "corregido"
     DOWNLOADED = "descargado"
@@ -106,15 +108,15 @@ class SubtitleStatus(StrEnum):
     ERROR = "error"
 
 
-# Estados terminales: no se reevaluan salvo que cambie el video o sus .srt.
-_DONE = {
+# Ya en español: no hace falta nada mas.
+_ALREADY_SPANISH = {
     SubtitleStatus.SPANISH_AUDIO,
     SubtitleStatus.SPANISH_TRACK,
     SubtitleStatus.SPANISH_RELEASE,
-    SubtitleStatus.IN_SYNC,
-    SubtitleStatus.FIXED,
-    SubtitleStatus.DOWNLOADED,
+    SubtitleStatus.SPANISH_BURNED,
 }
+# Estados terminales: no se reevaluan salvo que cambie el video o sus .srt.
+_DONE = _ALREADY_SPANISH | {SubtitleStatus.IN_SYNC, SubtitleStatus.FIXED, SubtitleStatus.DOWNLOADED}
 
 
 @dataclass
@@ -167,6 +169,7 @@ class SubtitleService:
         backup_dir: Path,
         log: Callable[[str], None] = lambda _: None,
         max_candidates: int = _MAX_CANDIDATES_PER_VIDEO,
+        detector: SpanishDetector | None = None,
     ):
         """Inicializa el servicio.
 
@@ -177,6 +180,8 @@ class SubtitleService:
             backup_dir: Donde mover los .srt reemplazados o descartados.
             log: Donde escribir el progreso (consola o journal).
             max_candidates: Candidatos nuevos a probar por video y pasada.
+            detector: Detector de doblaje/subtitulos quemados (Whisper +
+                Tesseract); sin el, solo se miran los metadatos.
         """
         self.provider = provider
         self.store = store
@@ -184,6 +189,8 @@ class SubtitleService:
         self.backup_dir = backup_dir
         self.log = log
         self.max_candidates = max_candidates
+        self.detector = detector
+        self._tools: frozenset[str] = detector.tools if detector else frozenset()
         self._run_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
 
     def run(
@@ -215,6 +222,13 @@ class SubtitleService:
             El resumen de la pasada (`aborted` dice si el repo quedo bloqueado).
         """
         self._run_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
+        # se recalcula por pasada: el daemon corre dias y el usuario puede
+        # instalar Whisper/Tesseract en el medio
+        self._tools = self.detector.tools if self.detector else frozenset()
+        missing = {"voz": "whisper-cpp", "ocr": "tesseract + tesseract-langpack-spa"}
+        for tool, package in missing.items():
+            if tool not in self._tools:
+                self.log(f"aviso: sin {package} no se detectan doblajes/subtitulos quemados ({tool})")
         videos = scan_library(movies_dir, series_dir)
         if path_prefix is not None:
             videos = [v for v in videos if v.path == path_prefix or path_prefix in v.path.parents]
@@ -259,6 +273,8 @@ class SubtitleService:
             return True
         if record.sidecars != _sidecar_signature(video.path):
             return True
+        if record.status not in _ALREADY_SPANISH and not self._tools <= _tools_of(record):
+            return True  # se instalo una deteccion que no se corrio cuando se evaluo
         if record.status in _DONE:
             return False
         return record.retry_after is None or datetime.fromisoformat(record.retry_after) <= datetime.now(UTC)
@@ -282,7 +298,7 @@ class SubtitleService:
             record = self._process(video, base, download)
         except (MediaProbeError, ExtractionError, OSError, ValueError) as exc:
             record = _with(base, SubtitleStatus.ERROR, str(exc)[:300], retry=_RETRY_ERROR)
-        record = replace(record, sidecars=_sidecar_signature(video.path))
+        record = replace(record, sidecars=_sidecar_signature(video.path), detected=",".join(sorted(self._tools)))
         self.store.put_video(record)
         self.log(f"{record.status:>18}  {video.path.name}  {record.detail}")
         return record
@@ -322,6 +338,11 @@ class SubtitleService:
             return _with(base, SubtitleStatus.SPANISH_TRACK, "trae subtitulos en español incrustados")
         if release_says_spanish(video.path.name):
             return _with(base, SubtitleStatus.SPANISH_RELEASE, "el nombre del archivo indica español")
+        detection = self._detect_spanish(video.path, base.size, base.mtime, info)
+        if detection is not None and detection.spanish_audio:
+            return _with(base, SubtitleStatus.SPANISH_AUDIO, "doblaje en español detectado al escuchar el audio")
+        if detection is not None and detection.burned_language == "es":
+            return _with(base, SubtitleStatus.SPANISH_BURNED, "subtitulos en español quemados en la imagen")
 
         reference = self._reference(video.path, info, base.size, base.mtime)
         if not reference.available:
@@ -474,6 +495,18 @@ class SubtitleService:
 
     # --- referencias y ffprobe (cacheados) ----------------------------------
 
+    def _detect_spanish(self, path: Path, size: int, mtime: float, info: MediaInfo) -> SpanishDetection | None:
+        """Escucha el audio y lee la imagen (cacheado; solo si hay herramientas para hacerlo)."""
+        if self.detector is None or not self._tools:
+            return None
+        cached = self.store.get_detection(path, size, mtime)
+        if cached is not None and self._tools <= cached.tools:
+            return cached
+        self.log(f"  escuchando el audio y leyendo subtitulos quemados de {path.name}...")
+        detection = self.detector.detect(path, info)
+        self.store.put_detection(path, size, mtime, detection)
+        return detection
+
     def _probe(self, path: Path, size: int, mtime: float) -> MediaInfo:
         cached = self.store.get_probe(path, size, mtime)
         if cached is not None:
@@ -579,7 +612,8 @@ def create_subtitle_service(
         El servicio listo para usar.
     """
     store = SubtitleStore(state_dir / "subs.db")
-    return SubtitleService(provider, store, cache_dir / "subs", state_dir / "subs-respaldo", log)
+    detector = SpanishDetector(cache_dir / "subs", log)
+    return SubtitleService(provider, store, cache_dir / "subs", state_dir / "subs-respaldo", log, detector=detector)
 
 
 def open_store(state_dir: Path) -> SubtitleStore:
@@ -602,6 +636,10 @@ def _queries(video: LibraryVideo) -> list[str]:
         pack = f"S{video.season:02d}E01"
         return list(dict.fromkeys([f"{t} {code}" for t in titles] + [f"{t} {pack}" for t in titles]))
     return list(dict.fromkeys(f"{t} {video.year}" if video.year else t for t in titles))
+
+
+def _tools_of(record: VideoRecord) -> frozenset[str]:
+    return frozenset(filter(None, record.detected.split(",")))
 
 
 def _read_cues(path: Path) -> list[Cue]:
