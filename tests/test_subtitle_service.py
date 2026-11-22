@@ -423,3 +423,16 @@ def test_an_unexpected_error_in_one_video_does_not_stop_the_run(lib, monkeypatch
     summary = lib.run(service)
 
     assert summary.by_status == {SubtitleStatus.IN_SYNC: 1, SubtitleStatus.ERROR: 1}
+
+
+def test_a_run_does_nothing_while_another_one_holds_the_lock(lib):
+    from misflix.infra.process_lock import exclusive_lock
+
+    service = lib.service()
+
+    with exclusive_lock(service.store.path.with_name("subs.lock")):
+        summary = lib.run(service)
+
+    assert summary.busy
+    assert summary.processed == 0
+    assert lib.run(service).processed == 1  # libre otra vez

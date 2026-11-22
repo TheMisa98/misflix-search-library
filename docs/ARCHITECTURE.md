@@ -598,7 +598,11 @@ de la alineación; los créditos además se sacan del archivo final.
   inotify, se hace polling; con las cachés, una pasada sin trabajo es casi
   gratis). Si subdivx queda bloqueado por Cloudflare, sigue verificando lo
   existente sin descargas y espera 1h, 2h, 4h… (tope 8h) antes de volver a abrir
-  el navegador.
+  el navegador. Nunca corren dos pasadas a la vez: `run()` toma un `flock`
+  exclusivo sobre `state_dir/subs.lock` (`infra/process_lock.py`); si ya lo
+  tiene otro proceso (el servicio, o un `misflix subs run` manual), no hace
+  nada y devuelve `busy` — el manual avisa y sale, el daemon reintenta en el
+  próximo intervalo.
 
 ## Agregar un provider nuevo
 

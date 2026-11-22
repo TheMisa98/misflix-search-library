@@ -51,6 +51,12 @@ def run(
     """
     service = _service(log=view.info)
     summary = _run_once(service, path, force=force, download=not no_download, verbose=True)
+    if summary.busy:
+        view.info(
+            "[yellow]Hay otra pasada en curso (probablemente el servicio).[/yellow] Esperá a que termine, "
+            f"o detenelo con: systemctl --user stop {_SERVICE_NAME}"
+        )
+        raise typer.Exit(1)
     view.show_counts(summary.by_status, f"Pasada: {summary.processed} de {summary.scanned} videos evaluados")
     if summary.aborted:
         view.info(f"[yellow]subdivx no disponible: {summary.aborted}[/yellow]")
@@ -67,6 +73,8 @@ def daemon(interval: int = typer.Option(15, help="Minutos entre pasadas.")) -> N
     blocked_backoff = timedelta(0)
     while True:
         summary = _run_once(service, None, force=False, download=True, verbose=False)
+        if summary.busy:
+            print("hay otra pasada en curso (manual); se reintenta en el proximo intervalo", flush=True)
         changed = {s: summary.by_status[s] for s in ("descargado", "corregido", "dudoso") if summary.by_status[s]}
         if changed:
             notify("Subtítulos actualizados", ", ".join(f"{count} {status}" for status, count in changed.items()))
