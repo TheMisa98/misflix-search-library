@@ -51,7 +51,14 @@ from misflix.core.subtitles.text import detect_language, dialogue_cues, drop_cre
 from misflix.infra.archives import ExtractionError, extract_subtitle_archive
 from misflix.infra.cloudflare import CloudflareBlockedError
 from misflix.infra.library import LibraryVideo, SidecarSubtitle, scan_library, sidecar_subtitles
-from misflix.infra.media_probe import MediaProbeError, extract_reference, levels_from_bytes, levels_to_bytes, probe
+from misflix.infra.media_probe import (
+    MediaProbeError,
+    available_audio_decoders,
+    extract_reference,
+    levels_from_bytes,
+    levels_to_bytes,
+    probe,
+)
 from misflix.infra.notify import notify
 from misflix.infra.subtitle_store import ActionRecord, SubtitleStore, VideoRecord
 
@@ -207,6 +214,7 @@ class SubtitleService:
         Returns:
             El resumen de la pasada (`aborted` dice si el repo quedo bloqueado).
         """
+        self._run_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         videos = scan_library(movies_dir, series_dir)
         if path_prefix is not None:
             videos = [v for v in videos if v.path == path_prefix or path_prefix in v.path.parents]
@@ -441,7 +449,7 @@ class SubtitleService:
                 if ok:
                     found.setdefault((candidate.source, candidate.id), candidate)
         profile = release_profile(video.path.name, info.format_title or "")
-        return rank_candidates(list(found.values()), profile)
+        return rank_candidates(list(found.values()), profile, info.duration or None)
 
     def _search(self, query: str) -> list[SubtitleCandidate]:
         cached = self.store.cached_search(self.provider.name, query, _SEARCH_CACHE_AGE)
@@ -486,13 +494,20 @@ class SubtitleService:
 
         if not cached:
             subtitle_stream = pick_reference_subtitle(info)
-            audio_stream = pick_dialogue_audio(info)
+            audio_stream = pick_dialogue_audio(info, available_audio_decoders() or None)
             folder.mkdir(parents=True, exist_ok=True)
             for stale in folder.iterdir():
                 stale.unlink()
             if subtitle_stream is not None or audio_stream is not None:
                 self.log(f"  leyendo referencia de {path.name} (puede tardar ~1 min)...")
-                extracted = extract_reference(path, subtitle_stream, audio_stream, folder)
+                try:
+                    extracted = extract_reference(path, subtitle_stream, audio_stream, folder)
+                except MediaProbeError:
+                    if subtitle_stream is None or audio_stream is None:
+                        raise
+                    # el audio no se pudo decodificar: alcanza con el subtitulo
+                    self.log("  el audio no se pudo leer; se usa solo el subtitulo de referencia")
+                    extracted = extract_reference(path, subtitle_stream, None, folder)
                 (folder / "niveles.txt").unlink(missing_ok=True)
                 if extracted.subtitle_text:
                     (folder / "referencia.srt").write_text(extracted.subtitle_text, encoding="utf-8")

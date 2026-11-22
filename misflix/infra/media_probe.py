@@ -12,10 +12,12 @@ prioridad minima de CPU y disco, y el resultado se cachea (ver
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from misflix.core.subtitles.media import MediaInfo, StreamInfo, has_center_channel
@@ -108,7 +110,9 @@ def parse_ffprobe(data: Mapping[str, object]) -> MediaInfo:
 
 
 def _as_dict(value: object) -> dict[str, object]:
-    return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
+    # claves en minusculas: hay archivos con tags `TITLE`/`LANGUAGE` en vez de
+    # `title`/`language` (verificado en vivo, The Big Bang Theory 9x17)
+    return {str(key).lower(): item for key, item in value.items()} if isinstance(value, dict) else {}
 
 
 def _text(value: object) -> str | None:
@@ -120,6 +124,54 @@ def _int(value: object) -> int | None:
         return int(str(value)) if value is not None else None
     except ValueError:
         return None
+
+
+@lru_cache(maxsize=1)
+def available_audio_decoders() -> frozenset[str]:
+    """Codecs de audio que el ffmpeg instalado puede decodificar.
+
+    Verificado en vivo: Fedora trae `ffmpeg-free`, sin decodificador de
+    E-AC3 (Dolby Digital Plus, muy comun en los WEB-DL) — pedir esa pista
+    hace fallar toda la extraccion ("no decoder found for: eac3"). Con esto
+    se elige otra pista decodificable, o se trabaja solo con el subtitulo de
+    referencia.
+
+    Returns:
+        Nombres de codec tal como los reporta ffprobe (`codec_name`:
+        "ac3", "dts", "aac", ...). Vacio si no se pudo consultar ffmpeg.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-decoders"], capture_output=True, text=True, stdin=subprocess.DEVNULL
+        )
+    except OSError:
+        return frozenset()
+    return parse_audio_decoders(result.stdout)
+
+
+def parse_audio_decoders(text: str) -> frozenset[str]:
+    """Lee la salida de `ffmpeg -decoders` y devuelve los codecs de audio decodificables.
+
+    Una linea como ` A....D dca  DCA (DTS Coherent Acoustics) (codec dts)`
+    aporta tanto el nombre del decodificador (`dca`) como el del codec que
+    reporta ffprobe (`dts`).
+
+    Args:
+        text: Salida de `ffmpeg -hide_banner -decoders`.
+
+    Returns:
+        Los nombres de codec de audio.
+    """
+    codecs: set[str] = set()
+    for line in text.splitlines():
+        match = re.match(r"^\s*A[.A-Z]{5}\s+(\S+)\s+(.*)$", line)
+        if match is None:
+            continue
+        codecs.add(match.group(1))
+        alias = re.search(r"\(codec (\S+)\)\s*$", match.group(2))
+        if alias:
+            codecs.add(alias.group(1))
+    return frozenset(codecs)
 
 
 def extract_reference(

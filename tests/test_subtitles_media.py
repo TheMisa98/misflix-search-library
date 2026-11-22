@@ -115,3 +115,34 @@ def test_pick_dialogue_audio_prefers_non_spanish_with_center_channel():
 )
 def test_has_center_channel(stream, expected):
     assert has_center_channel(stream) is expected
+
+
+def test_pick_dialogue_audio_skips_codecs_that_cannot_be_decoded_and_commentaries():
+    info = MediaInfo(
+        duration=10,
+        streams=(
+            StreamInfo(1, "audio", "eac3", language="eng", channels=6, channel_layout="5.1"),
+            StreamInfo(2, "audio", "ac3", language="eng", title="Director's Commentary", channels=6),
+            StreamInfo(3, "audio", "ac3", language="eng", channels=2, channel_layout="stereo"),
+        ),
+    )
+
+    assert pick_dialogue_audio(info).index == 1
+    assert pick_dialogue_audio(info, decodable={"ac3", "dts"}).index == 3
+    assert pick_dialogue_audio(info, decodable={"dts"}) is None
+
+
+def test_bracketed_track_titles_like_the_big_bang_theory_releases():
+    # pistas reales de The Big Bang Theory 9x17 (verificado en vivo)
+    info = MediaInfo(
+        duration=10,
+        streams=(
+            StreamInfo(1, "audio", "ac3", title="The Celebration Experimentation"),
+            StreamInfo(2, "audio", "aac", title="[AAC | 2.0 ENG]"),
+            StreamInfo(3, "subtitle", "subrip", title="[SRT | LAT]"),
+            StreamInfo(4, "subtitle", "subrip", title="[SRT | ENG]"),
+        ),
+    )
+
+    assert has_spanish_subtitle_track(info)
+    assert pick_reference_subtitle(info).index == 4

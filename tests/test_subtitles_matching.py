@@ -125,3 +125,33 @@ def test_pick_subtitle_files_for_an_episode_inside_a_pack():
 def test_pick_subtitle_files_single_unnumbered_file_and_movies():
     assert pick_subtitle_files(["Pilot.srt"], 1, 1) == ["Pilot.srt"]
     assert pick_subtitle_files(["cd1.srt", "cd2.srt", "nfo.txt"], None, None) == ["cd1.srt", "cd2.srt"]
+
+
+def test_title_matches_alternate_titles_after_aka():
+    # titulo real de subdivx para Tokyo Godfathers (verificado en vivo)
+    title = "Tôkyô goddofâzâzu (2003) aka Tokyo Godfathers"
+
+    assert title_matches(title, ["Tokyo Godfathers"])
+    assert title_matches(title, ["Tôkyô goddofâzâzu"])
+    assert matches_movie(
+        candidate(title), ["東京ゴッドファーザーズ", "Héroes al rescate", "Tokyo Godfathers"], 2003, None
+    )
+
+
+def test_mentioned_durations():
+    from misflix.core.subtitles.matching import mentioned_durations
+
+    assert mentioned_durations("Para la edición Bluray de 1:31:46 de duración") == [5506.0]
+    assert mentioned_durations("dura 92 min, la otra 1:32:53") == [5573.0, 5520.0]
+    assert mentioned_durations("versión 1080p de 2,3 GB") == []
+
+
+def test_rank_candidates_prefers_the_cut_with_the_same_duration():
+    local = release_profile("Tokyo Godfathers (2003) Remux-1080p.mkv")
+    bluray = candidate("Tokyo Godfathers (2003)", "Para la edición Bluray de 1:31:46 de duración", 1546, id_="old")
+    remaster = candidate(
+        "Tokyo Godfathers (2003)", "sincronizados para versiones Remastered de 1:32:52", 863, id_="new"
+    )
+
+    assert [c.id for c in rank_candidates([bluray, remaster], local, duration=5572.0)] == ["new", "old"]
+    assert [c.id for c in rank_candidates([bluray, remaster], local, duration=5506.5)] == ["old", "new"]

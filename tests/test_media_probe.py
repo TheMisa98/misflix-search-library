@@ -139,3 +139,26 @@ def test_extract_reference_raises_on_ffmpeg_error(tmp_path, monkeypatch):
 
     with pytest.raises(MediaProbeError, match="boom"):
         extract_reference(Path("/v.mkv"), None, StreamInfo(1, "audio", "aac"), tmp_path)
+
+
+def test_parse_audio_decoders_reads_names_and_codec_aliases():
+    text = (
+        "Decoders:\n"
+        " V....D = Video\n"
+        " ------\n"
+        " V....D h264                 H.264 / AVC\n"
+        " A....D ac3                  ATSC A/52A (AC-3)\n"
+        " A....D dca                  DCA (DTS Coherent Acoustics) (codec dts)\n"
+        " AF...D flac                 FLAC (Free Lossless Audio Codec)\n"
+        " S..... subrip               SubRip subtitle\n"
+    )
+
+    assert media_probe.parse_audio_decoders(text) == frozenset({"ac3", "dca", "dts", "flac"})
+
+
+def test_parse_ffprobe_reads_uppercase_tags():
+    info = parse_ffprobe(
+        {"streams": [{"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"TITLE": "[SRT | LAT]"}}]}
+    )
+
+    assert info.streams[0].title == "[SRT | LAT]"

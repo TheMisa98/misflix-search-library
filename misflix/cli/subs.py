@@ -136,6 +136,13 @@ def install_service(interval: int = typer.Option(15, help="Minutos entre pasadas
     """
     executable = shutil.which("misflix") or sys.argv[0]
     settings = get_settings()
+    missing = [str(d) for d in (settings.movies_dir, settings.series_dir) if not d.is_dir()]
+    if missing:
+        view.info(
+            f"[red]No existen {', '.join(missing)}.[/red] Definí MISFLIX_MOVIES_DIR/MISFLIX_SERIES_DIR "
+            "(o corré esto desde el repo, donde está el .env) antes de instalar el servicio."
+        )
+        raise typer.Exit(1)
     unit_path = Path.home() / ".config" / "systemd" / "user" / _SERVICE_NAME
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_path.write_text(

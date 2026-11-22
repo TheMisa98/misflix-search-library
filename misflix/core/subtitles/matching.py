@@ -30,6 +30,13 @@ _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 # que sea otra serie: "House M.D.", "House MD", "The Office (US)", "Skins (UK)".
 _ALLOWED_TITLE_EXTRAS = {"md", "m", "d", "us", "uk", "au", "the", "tv", "series", "serie"}
 _FORCED_RE = re.compile(r"\b(forzad[oa]s?|forced)\b", re.IGNORECASE)
+# "Tôkyô goddofâzâzu (2003) aka Tokyo Godfathers": el titulo original
+# romanizado y despues el conocido (verificado en vivo en subdivx).
+_ALTERNATE_TITLES_RE = re.compile(r"\s+(?:aka|a\.k\.a\.?)\s+|\s+/\s+", re.IGNORECASE)
+# Duraciones que los uploaders ponen en la descripcion ("1:31:46", "92 min")
+# para distinguir cortes (ej. la version Remastered dura un minuto mas).
+_HMS_RE = re.compile(r"\b(\d{1,2}):([0-5]\d):([0-5]\d)\b")
+_MINUTES_RE = re.compile(r"\b(\d{2,3})\s*min(?:utos|s)?\b", re.IGNORECASE)
 
 _SOURCES = {
     "bluray": ("bluray", "blu ray", "bdrip", "brrip", "bd", "remux", "bdremux"),
@@ -132,7 +139,8 @@ def title_matches(candidate_title: str, wanted_titles: Iterable[str]) -> bool:
 
     Exige que el titulo del candidato *empiece* con uno de los buscados y que
     lo que sobre sea solo un año o algo de `_ALLOWED_TITLE_EXTRAS` — asi
-    "House M.D." pasa para "House" pero "House of Cards" no.
+    "House M.D." pasa para "House" pero "House of Cards" no. Los titulos
+    alternativos ("X aka Y", "X / Y") se prueban cada uno por separado.
 
     Args:
         candidate_title: Titulo tal como lo cargo el uploader.
@@ -141,13 +149,14 @@ def title_matches(candidate_title: str, wanted_titles: Iterable[str]) -> bool:
     Returns:
         True si corresponde a alguno de los titulos buscados.
     """
-    base = normalize(_strip_episode_code(candidate_title))
+    variants = [normalize(part) for part in _ALTERNATE_TITLES_RE.split(_strip_episode_code(candidate_title))]
     for wanted in {normalize(title) for title in wanted_titles if title.strip()}:
-        if not wanted or not (base == wanted or base.startswith(wanted + " ")):
-            continue
-        extras = base[len(wanted) :].split()
-        if all(extra in _ALLOWED_TITLE_EXTRAS or _YEAR_RE.fullmatch(extra) for extra in extras):
-            return True
+        for base in variants:
+            if not wanted or not (base == wanted or base.startswith(wanted + " ")):
+                continue
+            extras = base[len(wanted) :].split()
+            if all(extra in _ALLOWED_TITLE_EXTRAS or _YEAR_RE.fullmatch(extra) for extra in extras):
+                return True
     return False
 
 
@@ -222,20 +231,23 @@ def release_profile(*names: str) -> ReleaseProfile:
     )
 
 
-def rank_candidates(candidates: Sequence[SubtitleCandidate], local: ReleaseProfile) -> list[SubtitleCandidate]:
+def rank_candidates(
+    candidates: Sequence[SubtitleCandidate], local: ReleaseProfile, duration: float | None = None
+) -> list[SubtitleCandidate]:
     """Ordena candidatos del mas al menos prometedor para el video local.
 
     Args:
         candidates: Candidatos ya filtrados (ver `matches_episode`/`matches_movie`).
         local: Perfil de version del video local.
+        duration: Duracion del video local en segundos, si se conoce.
 
     Returns:
         Los candidatos ordenados por `similarity` (desempatando por descargas).
     """
-    return sorted(candidates, key=lambda candidate: similarity(candidate, local), reverse=True)
+    return sorted(candidates, key=lambda candidate: similarity(candidate, local, duration), reverse=True)
 
 
-def similarity(candidate: SubtitleCandidate, local: ReleaseProfile) -> float:
+def similarity(candidate: SubtitleCandidate, local: ReleaseProfile, duration: float | None = None) -> float:
     """Puntaje de que tan probable es que `candidate` venga sincronizado para el video local.
 
     Pesa lo que en la practica determina la sincronia: el mismo grupo de
@@ -244,9 +256,14 @@ def similarity(candidate: SubtitleCandidate, local: ReleaseProfile) -> float:
     menos. Las descargas suman poco (logaritmico) para desempatar: un
     subtitulo muy bajado suele estar bien hecho, pero no para *esta* version.
 
+    Si la descripcion dice cuanto dura el video para el que se hizo, eso
+    pesa mucho: distingue cortes (version extendida, remasterizada) mejor que
+    cualquier nombre de release.
+
     Args:
         candidate: Candidato a puntuar.
         local: Perfil de version del video local.
+        duration: Duracion del video local en segundos, si se conoce.
 
     Returns:
         Puntaje (mas alto es mejor).
@@ -265,6 +282,7 @@ def similarity(candidate: SubtitleCandidate, local: ReleaseProfile) -> float:
     if local.service and f" {local.service} " in text:
         score += 1.5
     score += sum(1.0 for edition in local.editions if f" {edition} " in text)
+    score += _duration_score(candidate.description, duration)
     return score + 0.5 * math.log10(candidate.downloads + 1)
 
 
@@ -296,6 +314,35 @@ def pick_subtitle_files(names: Sequence[str], season: int | None, episode: int |
         return matching
     unnumbered = [name for name in subtitles if parse_episode_range(name.rsplit("/", 1)[-1]) is None]
     return unnumbered if len(subtitles) == 1 else []
+
+
+def mentioned_durations(text: str) -> list[float]:
+    """Duraciones (en segundos) mencionadas en una descripcion: "1:31:46", "92 min".
+
+    Args:
+        text: Descripcion del uploader.
+
+    Returns:
+        Las duraciones encontradas.
+    """
+    found = [int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in _HMS_RE.findall(text)]
+    found += [int(minutes) * 60 for minutes in _MINUTES_RE.findall(text)]
+    return [float(value) for value in found if 60 <= value <= 6 * 3600]
+
+
+def _duration_score(description: str, duration: float | None) -> float:
+    if not duration:
+        return 0.0
+    mentioned = mentioned_durations(description)
+    if not mentioned:
+        return 0.0
+    closest = min(abs(value - duration) for value in mentioned)
+    # la misma duracion es el mismo corte: pesa tanto como el mismo grupo de release
+    if closest <= 20:
+        return 6.0
+    if closest <= 90:
+        return 1.0
+    return -3.0 if closest > 180 else 0.0
 
 
 def _strip_episode_code(title: str) -> str:

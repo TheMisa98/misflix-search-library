@@ -14,7 +14,7 @@ from misflix.core.subtitles.media import MediaInfo, StreamInfo
 from misflix.core.subtitles.srt import Cue, format_srt, parse_srt
 from misflix.infra import library
 from misflix.infra.cloudflare import CloudflareBlockedError
-from misflix.infra.media_probe import ExtractedReference
+from misflix.infra.media_probe import ExtractedReference, MediaProbeError
 from misflix.infra.subtitle_store import SubtitleStore, VideoRecord
 from tests.test_subtitles_sync import make_timeline
 
@@ -109,6 +109,7 @@ def lib(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subtitle_service, "probe", fake_probe)
     monkeypatch.setattr(subtitle_service, "extract_reference", fake_extract)
+    monkeypatch.setattr(subtitle_service, "available_audio_decoders", lambda: frozenset({"dts", "ac3", "aac"}))
 
     class Lib:
         root = tmp_path
@@ -285,3 +286,21 @@ def test_sync_file_writes_the_corrected_subtitle(lib, tmp_path):
 
 def _video(lib) -> library.LibraryVideo:
     return library.scan_library(lib.movies, lib.series_dir)[0]
+
+
+def test_reference_falls_back_to_the_subtitle_when_the_audio_cannot_be_decoded(lib, monkeypatch):
+    calls: list[bool] = []
+
+    def flaky_extract(path, subtitle, audio, workdir):
+        calls.append(audio is not None)
+        if audio is not None:
+            raise MediaProbeError("Decoding requested, but no decoder found for: eac3")
+        return ExtractedReference(subtitle_text=format_srt(ENGLISH), levels_db=[])
+
+    monkeypatch.setattr(subtitle_service, "extract_reference", flaky_extract)
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))
+
+    summary = lib.run(lib.service())
+
+    assert calls == [True, False]
+    assert summary.by_status == {SubtitleStatus.IN_SYNC: 1}

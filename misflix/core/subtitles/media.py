@@ -6,6 +6,7 @@ Los datos vienen de `ffprobe` (ver `infra/media_probe.py`); aca solo se decide.
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 
 TEXT_SUBTITLE_CODECS = frozenset({"subrip", "ass", "ssa", "mov_text", "webvtt", "text"})
@@ -20,6 +21,7 @@ _SPANISH_RELEASE_RE = re.compile(
     r"\b(castellano|latino|dual|subtitulad[oa]|sub\s*esp|espa[ñn]ol|spanish|multi[\s.-]?lang)\b", re.IGNORECASE
 )
 _HEARING_IMPAIRED_TITLE_RE = re.compile(r"\b(sdh|hi|cc|hearing)\b", re.IGNORECASE)
+_COMMENTARY_RE = re.compile(r"\b(comment|commentary|comentario|comentarios)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -159,20 +161,27 @@ def pick_reference_subtitle(info: MediaInfo) -> StreamInfo | None:
     )
 
 
-def pick_dialogue_audio(info: MediaInfo) -> StreamInfo | None:
+def pick_dialogue_audio(info: MediaInfo, decodable: Collection[str] | None = None) -> StreamInfo | None:
     """Elige la pista de audio donde escuchar el dialogo original.
 
     Se prefiere una que no sea española (el subtitulo español se sincroniza
     contra el audio original), con canal central (5.1/7.1, ver
-    `has_center_channel`) y la marcada por defecto.
+    `has_center_channel`) y la marcada por defecto. Las de comentarios
+    nunca se eligen.
 
     Args:
         info: Datos del video.
+        decodable: Si se da, solo pistas con un codec de esta coleccion (el
+            ffmpeg del sistema puede no tener todos los decodificadores).
 
     Returns:
-        La pista elegida, o None si el video no tiene audio.
+        La pista elegida, o None si no hay ninguna utilizable.
     """
-    audio = info.of_kind("audio")
+    audio = [
+        stream
+        for stream in info.of_kind("audio")
+        if not _COMMENTARY_RE.search(stream.title or "") and (decodable is None or stream.codec in decodable)
+    ]
     if not audio:
         return None
     return min(audio, key=lambda s: (is_spanish(s), not has_center_channel(s), not s.default, s.index))
