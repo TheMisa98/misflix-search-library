@@ -242,3 +242,12 @@ sincronía nunca decodifica video (`ffmpeg -vn`). **Verificado en vivo**: con el
 `mesa-va-drivers` de Fedora, VAAPI en la RX 5600/5700 no decodifica H.264 ("No
 support for codec h264 profile 100") — hace falta `mesa-va-drivers-freeworld` de
 RPM Fusion; para unos pocos fotogramas por video la diferencia es chica.
+
+## 2026-11-22 — Una sola pasada de subtítulos a la vez (`flock`)
+
+Con el servicio corriendo solo y el usuario pudiendo lanzar `misflix subs run` a mano,
+dos pasadas podían procesar el mismo video a la vez (mover/reescribir el mismo `.srt`).
+SQLite serializa la base, pero no los archivos de la biblioteca. Se usa un `flock`
+exclusivo y no bloqueante sobre `subs.lock` junto a la base: es del kernel, se libera
+solo si el proceso muere (no quedan candados huérfanos) y no agrega dependencias. La
+pasada que no lo obtiene no hace nada (`busy`).

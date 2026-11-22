@@ -61,6 +61,7 @@ from misflix.infra.media_probe import (
     probe,
 )
 from misflix.infra.notify import notify
+from misflix.infra.process_lock import exclusive_lock
 from misflix.infra.spanish_detection import SpanishDetection, SpanishDetector
 from misflix.infra.subtitle_store import ActionRecord, SubtitleStore, VideoRecord
 
@@ -128,13 +129,16 @@ class RunSummary:
         scanned: Videos encontrados.
         processed: Videos evaluados en esta pasada.
         by_status: Cantidad de videos evaluados por estado resultante.
-        aborted: Motivo si la pasada se corto antes de terminar.
+        aborted: Motivo si el repo de subtitulos quedo bloqueado (la pasada
+            siguio sin descargas).
+        busy: True si no se hizo nada porque habia otra pasada en curso.
     """
 
     scanned: int = 0
     processed: int = 0
     by_status: Counter[str] = field(default_factory=Counter)
     aborted: str | None = None
+    busy: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,8 +224,23 @@ class SubtitleService:
             on_progress: Callback `(indice, total, video)` antes de cada video.
 
         Returns:
-            El resumen de la pasada (`aborted` dice si el repo quedo bloqueado).
+            El resumen de la pasada (`aborted` dice si el repo quedo bloqueado;
+            `busy`, si no se hizo nada porque habia otra pasada en curso).
         """
+        with exclusive_lock(self.store.path.with_name("subs.lock")) as acquired:
+            if not acquired:
+                return RunSummary(busy=True)
+            return self._run(movies_dir, series_dir, path_prefix, force, download, on_progress)
+
+    def _run(
+        self,
+        movies_dir: Path,
+        series_dir: Path,
+        path_prefix: Path | None,
+        force: bool,
+        download: bool,
+        on_progress: Callable[[int, int, LibraryVideo], None] | None,
+    ) -> RunSummary:
         self._run_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         # se recalcula por pasada: el daemon corre dias y el usuario puede
         # instalar Whisper/Tesseract en el medio
