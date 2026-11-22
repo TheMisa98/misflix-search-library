@@ -84,3 +84,11 @@ def test_detection_cache_round_trip(tmp_path):
 
     assert store.get_detection(Path("/v.mkv"), 10, 1.0) == detection
     assert store.get_detection(Path("/v.mkv"), 11, 1.0) is None
+
+
+def test_unusable_archives_recorded_by_older_versions_do_not_count_as_tried(tmp_path):
+    store = SubtitleStore(tmp_path / "subs.db")
+
+    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "sin_srt_utilizable", None)
+
+    assert not store.was_tried(Path("/v.mkv"), "subdivx", "1")

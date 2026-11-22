@@ -286,18 +286,28 @@ def similarity(candidate: SubtitleCandidate, local: ReleaseProfile, duration: fl
     return score + 0.5 * math.log10(candidate.downloads + 1)
 
 
-def pick_subtitle_files(names: Sequence[str], season: int | None, episode: int | None) -> list[str]:
+def pick_subtitle_files(
+    names: Sequence[str], season: int | None, episode: int | None, pack: EpisodeRange | None = None
+) -> list[str]:
     """Elige, de los archivos de un zip/rar, los .srt que corresponden al video.
 
     Para una pelicula (sin `season`/`episode`) devuelve todos los .srt
     (normalmente uno; con varios CDs, cada uno se prueba aparte). Para un
-    episodio, los que tienen ese codigo en el nombre — o, si el archivo trae
-    un unico .srt sin codigo, ese.
+    episodio, en este orden:
+
+    1. los que tienen el codigo en el nombre (`S01E09`, `1x09`);
+    2. los que lo nombran de otra forma (`1-09`, `109`, `E09`, `Capitulo 9`)
+       — verificado en vivo: un pack de House de subdivx trae
+       "House M.D 1-09 - No RCP.srt";
+    3. si el archivo es un pack (`pack`) con exactamente un .srt por
+       episodio del rango, el que ocupa su posicion en orden alfabetico;
+    4. si trae un unico .srt sin codigo, ese.
 
     Args:
         names: Nombres (rutas relativas) de los archivos extraidos.
         season: Temporada buscada, o None para peliculas.
         episode: Episodio buscado, o None para peliculas.
+        pack: Rango de episodios que declara el candidato, si es un pack.
 
     Returns:
         Los nombres elegidos, en el orden recibido.
@@ -305,15 +315,35 @@ def pick_subtitle_files(names: Sequence[str], season: int | None, episode: int |
     subtitles = [name for name in names if name.lower().endswith(".srt")]
     if season is None or episode is None:
         return subtitles
-    matching = [
+
+    def basename(name: str) -> str:
+        return name.rsplit("/", 1)[-1]
+
+    coded = [
         name
         for name in subtitles
-        if (found := parse_episode_range(name.rsplit("/", 1)[-1])) is not None and found.covers(season, episode)
+        if (found := parse_episode_range(basename(name))) is not None and found.covers(season, episode)
     ]
-    if matching:
-        return matching
-    unnumbered = [name for name in subtitles if parse_episode_range(name.rsplit("/", 1)[-1]) is None]
+    if coded:
+        return coded
+    mentioned = [name for name in subtitles if _mentions_episode(basename(name), season, episode)]
+    if mentioned:
+        return mentioned
+    if pack is not None and pack.season == season and pack.first <= episode <= pack.last:
+        if len(subtitles) == pack.last - pack.first + 1:
+            return [sorted(subtitles, key=lambda name: basename(name).lower())[episode - pack.first]]
+    unnumbered = [name for name in subtitles if parse_episode_range(basename(name)) is None]
     return unnumbered if len(subtitles) == 1 else []
+
+
+def _mentions_episode(name: str, season: int, episode: int) -> bool:
+    text = name.lower()
+    patterns = [
+        rf"(?<!\d){season}[-_.]0?{episode}(?!\d)",  # "1-09", "1.09"
+        rf"(?<!\d){season}{episode:02d}(?!\d)",  # "109"
+        rf"\b(?:e|ep|cap|capitulo|capítulo|episodio|episode)[\s._-]*0?{episode}(?!\d)",  # "E09", "Capitulo 9"
+    ]
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def mentioned_durations(text: str) -> list[float]:

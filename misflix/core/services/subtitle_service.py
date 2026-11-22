@@ -26,6 +26,7 @@ from misflix.core.subtitles.matching import (
     matches_episode,
     matches_movie,
     normalize,
+    parse_episode_range,
     pick_subtitle_files,
     rank_candidates,
     release_profile,
@@ -429,7 +430,9 @@ class SubtitleService:
                 self.log(f"  no se pudo bajar {candidate.source} #{candidate.id}: {exc}")
                 continue
             if outcome is None:
-                self.store.add_attempt(video.path, candidate.source, candidate.id, "sin_srt_utilizable", None)
+                # no se registra como probado: el archivo queda en cache y una
+                # version mejor de `pick_subtitle_files` puede encontrarle el .srt
+                self.log(f"  {candidate.source} #{candidate.id}: no se encontro el .srt del video adentro")
                 continue
             cues, report = outcome
             self.store.add_attempt(video.path, candidate.source, candidate.id, report.verdict, report.score)
@@ -460,7 +463,7 @@ class SubtitleService:
                 return None
             root = Path(tmp) / "x"
             names = [str(path.relative_to(root)) for path in files]
-            chosen = pick_subtitle_files(names, video.season, video.episode)
+            chosen = pick_subtitle_files(names, video.season, video.episode, parse_episode_range(candidate.title))
             best: tuple[list[Cue], SyncReport] | None = None
             for name in chosen:
                 cues = _read_cues(root / name)

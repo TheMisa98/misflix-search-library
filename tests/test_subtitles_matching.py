@@ -166,3 +166,26 @@ def test_a_different_cut_from_the_same_group_loses_to_the_same_duration():
     same_cut = candidate("Tokyo Godfathers (2003)", "Para la edición Bluray de 1:31:46 de duración", 1546, id_="b")
 
     assert [c.id for c in rank_candidates([remastered, same_cut], local, duration=5506.8)] == ["b", "r"]
+
+
+def test_pick_subtitle_files_understands_other_episode_numberings():
+    # pack real de subdivx para House S01E09-12 (verificado en vivo)
+    pack = [
+        "House M.D 1-09 - No RCP.srt",
+        "House M.D 1-10 - Historias.srt",
+        "House M.D 1-11 - Desintoxicacion.srt",
+        "House M.D 1-12 - Medicina Deportiva.srt",
+    ]
+
+    assert pick_subtitle_files(pack, 1, 10) == ["House M.D 1-10 - Historias.srt"]
+    assert pick_subtitle_files(["House 109.srt", "House 110.srt"], 1, 9) == ["House 109.srt"]
+    assert pick_subtitle_files(["Capitulo 9.srt", "Capitulo 10.srt"], 1, 9) == ["Capitulo 9.srt"]
+    assert pick_subtitle_files(["Ep09.srt", "Ep10.srt"], 1, 10) == ["Ep10.srt"]
+
+
+def test_pick_subtitle_files_maps_an_unnumbered_pack_by_position():
+    names = ["b - Historias.srt", "a - No RCP.srt", "c - Desintoxicacion.srt"]
+
+    assert pick_subtitle_files(names, 1, 10, EpisodeRange(1, 9, 11)) == ["b - Historias.srt"]
+    # si la cantidad no coincide con el rango, no se adivina
+    assert pick_subtitle_files(names, 1, 10, EpisodeRange(1, 9, 12)) == []

@@ -323,7 +323,9 @@ class SubtitleStore:
         """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM attempts WHERE video_path = ? AND source = ? AND candidate_id = ?",
+                # "sin_srt_utilizable" lo registraban versiones anteriores: no cuenta como probado
+                "SELECT 1 FROM attempts WHERE video_path = ? AND source = ? AND candidate_id = ?"
+                " AND verdict != 'sin_srt_utilizable'",
                 (str(video_path), source, candidate_id),
             ).fetchone()
         return row is not None
