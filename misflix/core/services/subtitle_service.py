@@ -42,6 +42,8 @@ from misflix.core.subtitles.media import (
 from misflix.core.subtitles.speech import LEVEL_STEP_SECONDS, detect_speech
 from misflix.core.subtitles.srt import Cue, decode_subtitle, format_srt, parse_srt
 from misflix.core.subtitles.sync import (
+    VERIFIER_VERSION,
+    ReferenceKind,
     SyncReport,
     SyncVerdict,
     apply_alignment,
@@ -91,6 +93,8 @@ _RETRY_PENDING = timedelta(hours=1)
 # minuto) es una pista forzada o incompleta: no sirve para sincronizar.
 _MIN_REFERENCE_LINES_PER_MINUTE = 2.0
 _UNCERTAIN_SUFFIX = ".es.dudoso"
+# Motivo con que se respalda un .srt que no corresponde al video (ver `_restore_backups`).
+_WRONG_REASON = "no corresponde al video"
 
 
 class SubtitleStatus(StrEnum):
@@ -119,6 +123,9 @@ _ALREADY_SPANISH = {
 }
 # Estados terminales: no se reevaluan salvo que cambie el video o sus .srt.
 _DONE = _ALREADY_SPANISH | {SubtitleStatus.IN_SYNC, SubtitleStatus.FIXED, SubtitleStatus.DOWNLOADED}
+# Estados que dependen de la verificacion: se reevaluan apenas esta mejora
+# (`VERIFIER_VERSION`), sin esperar el plazo de reintento.
+_RECHECKED = {SubtitleStatus.UNCERTAIN, SubtitleStatus.NOT_FOUND}
 
 
 @dataclass
@@ -154,12 +161,20 @@ class _Reference:
         return bool(self.subtitles or self.speech)
 
     def check(self, cues: Sequence[Cue]) -> SyncReport | None:
-        """Verifica `cues`: contra el subtitulo de referencia y, si no es concluyente, contra la voz."""
+        """Verifica `cues`: contra el subtitulo de referencia y, si no es concluyente, contra la voz.
+
+        Como segunda opinion la voz solo puede confirmar: es la referencia mas
+        debil (calibrado: contra la voz sola, el 14% de los subtitulos
+        correctos da "no coincide"). Verificado en vivo: dejandola decidir
+        "no coincide" sobre un dudoso del subtitulo, se mandaron al respaldo 48
+        subtitulos correctos de House.
+        """
         primary = check_against_subtitles(cues, self.subtitles) if self.subtitles else None
-        if self.speech and (primary is None or primary.verdict == SyncVerdict.UNCERTAIN):
-            secondary = check_against_speech(cues, self.speech, self.duration)
-            if primary is None or secondary.verdict != SyncVerdict.UNCERTAIN:
-                return secondary
+        if not self.speech or (primary is not None and primary.verdict != SyncVerdict.UNCERTAIN):
+            return primary
+        secondary = check_against_speech(cues, self.speech, self.duration)
+        if primary is None or _verified(secondary):
+            return secondary
         return primary
 
 
@@ -310,6 +325,8 @@ class SubtitleService:
             return True  # se instalo una deteccion que no se corrio cuando se evaluo
         if record.status in _DONE:
             return False
+        if record.status in _RECHECKED and record.verifier < VERIFIER_VERSION:
+            return True  # la verificacion mejoro desde que se evaluo
         return record.retry_after is None or datetime.fromisoformat(record.retry_after) <= datetime.now(UTC)
 
     def process(self, video: LibraryVideo, download: bool = True) -> VideoRecord:
@@ -333,7 +350,12 @@ class SubtitleService:
             record = _with(base, SubtitleStatus.PENDING, str(exc)[:300], retry=_RETRY_PENDING)
         except (MediaProbeError, ExtractionError, OSError, ValueError) as exc:
             record = _with(base, SubtitleStatus.ERROR, str(exc)[:300], retry=_RETRY_ERROR)
-        record = replace(record, sidecars=_sidecar_signature(video.path), detected=",".join(sorted(self._tools)))
+        record = replace(
+            record,
+            sidecars=_sidecar_signature(video.path),
+            detected=",".join(sorted(self._tools)),
+            verifier=VERIFIER_VERSION,
+        )
         self.store.put_video(record)
         self.log(f"{record.status:>18}  {video.path.name}  {record.detail}")
         return record
@@ -357,7 +379,7 @@ class SubtitleService:
         reference = self._reference(video_path, info, stat.st_size, stat.st_mtime)
         cues = _read_cues(subtitle_path)
         report = reference.check(cues) if reference.available else None
-        if report is None or report.verdict not in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE):
+        if report is None or not _verified(report):
             return report, None
         fixed = apply_alignment(cues, report) if report.verdict == SyncVerdict.FIXABLE else drop_credits(cues)
         written = self._write(video_path, fixed, f"sincronizado a mano desde {subtitle_path.name}")
@@ -384,15 +406,24 @@ class SubtitleService:
             return _with(base, SubtitleStatus.NO_REFERENCE, "sin subtitulo ni audio para verificar", _RETRY_NOT_FOUND)
 
         existing = self._review_existing(video, reference)
-        good = [item for item in existing if item[1].verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE)]
+        good = [item for item in existing if _verified(item[1])]
+        restored: list[Path] = []
+        if not good:
+            restored = self._restore_backups(video, reference)
+            if restored:
+                existing = self._review_existing(video, reference)
+                good = [item for item in existing if _verified(item[1])]
         if good:
             path, report = max(good, key=lambda item: item[1].score)
             status = SubtitleStatus.IN_SYNC if report.verdict == SyncVerdict.IN_SYNC else SubtitleStatus.FIXED
             detail = "el subtitulo existente esta bien" if status == SubtitleStatus.IN_SYNC else "se resincronizo"
+            if restored:  # antes no habia ninguno bueno: es uno de los restaurados
+                detail = "se restauro un subtitulo que se habia descartado por error"
             return _with(base, status, detail, subtitle=path, report=report)
 
+        # lo que queda junto al video sin verificar (dudoso, o "no coincide" segun la voz sola)
+        uncertain = [item for item in existing if not _verified(item[1])]
         if not download:
-            uncertain = [item for item in existing if item[1].verdict == SyncVerdict.UNCERTAIN]
             if uncertain:
                 path, report = uncertain[0]
                 detail = "verificacion no concluyente"
@@ -406,7 +437,6 @@ class SubtitleService:
                     self._backup(video.path, path, "reemplazado por uno verificado")
             return _with(base, SubtitleStatus.DOWNLOADED, found.source, None, found.path, found.report)
 
-        uncertain = [item for item in existing if item[1].verdict == SyncVerdict.UNCERTAIN]
         if uncertain:
             path, report = uncertain[0]
             return _with(base, SubtitleStatus.UNCERTAIN, "verificacion no concluyente", _RETRY_NOT_FOUND, path, report)
@@ -423,8 +453,11 @@ class SubtitleService:
         """Verifica cada .srt en español que ya esta junto al video y actua segun el veredicto.
 
         Bien sincronizado: se deja. Desfasado: se corrige en el mismo archivo
-        (respaldando el original). De otro episodio/serie: se mueve al
-        respaldo. Dudoso: se deja como esta.
+        (respaldando el original). De otro episodio/serie segun el subtitulo
+        de referencia: se mueve al respaldo. Dudoso, o "no coincide" segun la
+        voz sola (no alcanza para sacar un archivo de la biblioteca): se deja
+        como esta. Un `.es.dudoso.srt` que ahora verifica pasa a ser el
+        `.es.srt` del video.
         """
         reviewed: list[tuple[Path, SyncReport]] = []
         for sidecar in self._spanish_sidecars(video.path):
@@ -437,11 +470,51 @@ class SubtitleService:
                 self._backup(video.path, sidecar.path, "original antes de resincronizar")
                 _write_srt(sidecar.path, fixed)
                 self.store.log_action(video.path, "resincronizado", sidecar.path, detail=_describe(report))
-            elif report.verdict == SyncVerdict.WRONG:
-                self._backup(video.path, sidecar.path, f"no corresponde al video ({_describe(report)})")
+            elif _conclusively_wrong(report):
+                self._backup(video.path, sidecar.path, f"{_WRONG_REASON} ({_describe(report)})")
                 continue
-            reviewed.append((sidecar.path, report))
+            path = sidecar.path
+            if _verified(report):
+                path = self._confirm_uncertain(video.path, path, report)
+            reviewed.append((path, report))
         return reviewed
+
+    def _restore_backups(self, video: LibraryVideo, reference: _Reference) -> list[Path]:
+        """Devuelve a su lugar los .srt descartados por "no corresponder" que la verificacion actual no descartaria.
+
+        Verificado en vivo: con la version 1 de la verificacion, la voz
+        mandaba al respaldo subtitulos correctos (ver `_Reference.check`).
+        Solo se restaura donde el archivo original no fue reemplazado; el
+        restaurado se revisa despues como cualquier .srt existente.
+
+        Returns:
+            Los archivos restaurados.
+        """
+        restored = []
+        for action in self.store.backups(video.path):
+            if not action.detail.startswith(_WRONG_REASON) or action.file is None or action.backup is None:
+                continue
+            original, backup = Path(action.file), Path(action.backup)
+            if original.exists() or not backup.exists():
+                continue
+            report = reference.check(_read_cues(backup))
+            if report is None or _conclusively_wrong(report):
+                continue
+            shutil.copy2(backup, original)
+            detail = f"descartado por error ({_describe(report)})"
+            self.store.log_action(video.path, "restaurado", original, backup, detail)
+            restored.append(original)
+        return restored
+
+    def _confirm_uncertain(self, video_path: Path, path: Path, report: SyncReport) -> Path:
+        """Renombra a `<video>.es.srt` el `.es.dudoso.srt` que escribio una pasada anterior, si ahora verifico."""
+        uncertain = video_path.with_name(f"{video_path.stem}{_UNCERTAIN_SUFFIX}.srt")
+        confirmed = video_path.with_name(f"{video_path.stem}.es.srt")
+        if path != uncertain or confirmed.exists():
+            return path
+        path.rename(confirmed)
+        self.store.log_action(video_path, "confirmado", confirmed, detail=f"era {path.name} ({_describe(report)})")
+        return confirmed
 
     def _download_best(self, video: LibraryVideo, info: MediaInfo, reference: _Reference) -> tuple[_Found | None, int]:
         """Prueba candidatos del repo en orden hasta que uno verifique y lo escribe.
@@ -473,7 +546,7 @@ class SubtitleService:
                     break
                 # un pack se prueba una vez por numeracion: de el sale otro .srt
                 key = f"{candidate.id}@{numbered_as}" if numbered_as else candidate.id
-                if self.store.was_tried(video.path, candidate.source, key):
+                if self.store.was_tried(video.path, candidate.source, key, VERIFIER_VERSION):
                     continue
                 tried += 1
                 try:
@@ -489,8 +562,10 @@ class SubtitleService:
                     self.log(f"  {candidate.source} #{candidate.id}: no se encontro el .srt del video adentro")
                     continue
                 cues, report = outcome
-                self.store.add_attempt(video.path, candidate.source, key, report.verdict, report.score)
-                if report.verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE):
+                self.store.add_attempt(
+                    video.path, candidate.source, key, report.verdict, report.score, VERIFIER_VERSION
+                )
+                if _verified(report):
                     fixed = (
                         apply_alignment(cues, report) if report.verdict == SyncVerdict.FIXABLE else drop_credits(cues)
                     )
@@ -754,6 +829,18 @@ def _mtime(video: LibraryVideo) -> float:
         return 0.0
 
 
+def _verified(report: SyncReport) -> bool:
+    return report.verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE)
+
+
+def _conclusively_wrong(report: SyncReport) -> bool:
+    """Indica un "no coincide" contra el subtitulo de referencia: alcanza para sacar un .srt de la biblioteca.
+
+    Contra la voz sola no alcanza (ver `_Reference.check`).
+    """
+    return report.verdict == SyncVerdict.WRONG and report.reference == ReferenceKind.SUBTITLES
+
+
 def _rank(report: SyncReport) -> tuple[int, float]:
     order = {SyncVerdict.IN_SYNC: 3, SyncVerdict.FIXABLE: 2, SyncVerdict.UNCERTAIN: 1, SyncVerdict.WRONG: 0}
     return order[report.verdict], report.score
@@ -761,8 +848,9 @@ def _rank(report: SyncReport) -> tuple[int, float]:
 
 def _describe(report: SyncReport) -> str:
     return (
-        f"{report.verdict} contra {report.reference}, puntaje {report.score:+.2f}, "
-        f"{report.alignment.cuts} cortes, ratio {report.alignment.ratio:.4f}"
+        f"{report.verdict} contra {report.reference}, puntaje {report.score:+.2f} "
+        f"({report.significance:.1f} desvios sobre el azar), {report.alignment.cuts} cortes, "
+        f"ratio {report.alignment.ratio:.4f}"
     )
 
 

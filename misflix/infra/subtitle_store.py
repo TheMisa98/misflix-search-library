@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS videos (
     updated_at TEXT NOT NULL,
     retry_after TEXT,
     sidecars TEXT NOT NULL DEFAULT '',
-    detected TEXT NOT NULL DEFAULT ''
+    detected TEXT NOT NULL DEFAULT '',
+    verifier INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS detections (
     path TEXT PRIMARY KEY,
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     verdict TEXT NOT NULL,
     score REAL,
     tried_at TEXT NOT NULL,
+    verifier INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (video_path, source, candidate_id)
 );
 CREATE TABLE IF NOT EXISTS searches (
@@ -113,6 +115,9 @@ class VideoRecord:
         detected: Detecciones de español que se pudieron correr al evaluarlo
             ("ocr,voz"); si despues se instala una herramienta que faltaba,
             el video se reevalua.
+        verifier: Version de la verificacion con que se evaluo (ver
+            `VERIFIER_VERSION` en `core/subtitles/sync.py`); si la
+            verificacion mejora, un video dudoso o sin encontrar se reevalua.
     """
 
     path: str
@@ -127,6 +132,7 @@ class VideoRecord:
     retry_after: str | None = None
     sidecars: str = ""
     detected: str = ""
+    verifier: int = 1
 
 
 @dataclass(frozen=True)
@@ -163,10 +169,11 @@ class SubtitleStore:
         self.path = path
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            # bases creadas antes de existir la columna `detected`
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
-            if "detected" not in columns:
-                conn.execute("ALTER TABLE videos ADD COLUMN detected TEXT NOT NULL DEFAULT ''")
+            # bases creadas antes de existir estas columnas
+            for table, column, definition in _ADDED_COLUMNS:
+                columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def get_probe(self, path: Path, size: int, mtime: float) -> MediaInfo | None:
         """Salida de ffprobe cacheada de `path`, si el archivo no cambio desde entonces.
@@ -310,27 +317,31 @@ class SubtitleStore:
         with self._connect() as conn:
             return dict(conn.execute("SELECT status, COUNT(*) FROM videos GROUP BY status ORDER BY status"))
 
-    def was_tried(self, video_path: Path, source: str, candidate_id: str) -> bool:
-        """Indica si ese candidato ya se probo para ese video.
+    def was_tried(self, video_path: Path, source: str, candidate_id: str, verifier: int) -> bool:
+        """Indica si ese candidato ya se probo para ese video con la verificacion actual.
 
         Args:
             video_path: Video.
             source: Provider del candidato.
             candidate_id: Id del candidato.
+            verifier: Version actual de la verificacion: un intento hecho con
+                una anterior no cuenta (con la nueva puede verificar).
 
         Returns:
-            True si ya hay un intento registrado.
+            True si ya hay un intento registrado con esa version o una posterior.
         """
         with self._connect() as conn:
             row = conn.execute(
                 # "sin_srt_utilizable" lo registraban versiones anteriores: no cuenta como probado
                 "SELECT 1 FROM attempts WHERE video_path = ? AND source = ? AND candidate_id = ?"
-                " AND verdict != 'sin_srt_utilizable'",
-                (str(video_path), source, candidate_id),
+                " AND verdict != 'sin_srt_utilizable' AND verifier >= ?",
+                (str(video_path), source, candidate_id, verifier),
             ).fetchone()
         return row is not None
 
-    def add_attempt(self, video_path: Path, source: str, candidate_id: str, verdict: str, score: float | None) -> None:
+    def add_attempt(
+        self, video_path: Path, source: str, candidate_id: str, verdict: str, score: float | None, verifier: int
+    ) -> None:
         """Registra el resultado de probar un candidato.
 
         Args:
@@ -339,11 +350,13 @@ class SubtitleStore:
             candidate_id: Id del candidato.
             verdict: Veredicto (ver `SyncVerdict`) o motivo de descarte.
             score: Puntaje de la verificacion, si la hubo.
+            verifier: Version de la verificacion usada.
         """
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO attempts VALUES (?, ?, ?, ?, ?, ?)",
-                (str(video_path), source, candidate_id, verdict, score, _now()),
+                "INSERT OR REPLACE INTO attempts"
+                " (video_path, source, candidate_id, verdict, score, tried_at, verifier) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(video_path), source, candidate_id, verdict, score, _now(), verifier),
             )
 
     def cached_search(self, source: str, query: str, max_age: timedelta) -> list[SubtitleCandidate] | None:
@@ -412,6 +425,23 @@ class SubtitleStore:
             ).fetchall()
         return [ActionRecord(*row) for row in rows]
 
+    def backups(self, video_path: Path) -> list[ActionRecord]:
+        """Archivos de `video_path` que se mandaron al respaldo, del mas nuevo al mas viejo.
+
+        Args:
+            video_path: Video.
+
+        Returns:
+            Las acciones "respaldado" de ese video.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT at, video_path, action, file, backup, detail FROM actions"
+                " WHERE video_path = ? AND action = 'respaldado' ORDER BY id DESC",
+                (str(video_path),),
+            ).fetchall()
+        return [ActionRecord(*row) for row in rows]
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.path, timeout=30)
@@ -424,7 +454,14 @@ class SubtitleStore:
 
 
 _VIDEO_COLUMNS = (
-    "path, size, mtime, status, detail, subtitle_path, reference, score, updated_at, retry_after, sidecars, detected"
+    "path, size, mtime, status, detail, subtitle_path, reference, score, updated_at, retry_after, sidecars, detected,"
+    " verifier"
+)
+# (tabla, columna, definicion) agregadas despues de la primera version del esquema
+_ADDED_COLUMNS = (
+    ("videos", "detected", "TEXT NOT NULL DEFAULT ''"),
+    ("videos", "verifier", "INTEGER NOT NULL DEFAULT 1"),
+    ("attempts", "verifier", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 

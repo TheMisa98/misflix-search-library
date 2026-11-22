@@ -40,12 +40,12 @@ def test_attempts_searches_and_actions(tmp_path):
     store = SubtitleStore(tmp_path / "subs.db")
     candidate = SubtitleCandidate(id="1", source="subdivx", title="House M.D. S01E01", description="d", downloads=3)
 
-    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "no_coincide", 0.02)
+    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "no_coincide", 0.02, verifier=2)
     store.put_search("subdivx", "house s01e01", [candidate])
     store.log_action(Path("/v.mkv"), "respaldado", Path("/v.srt"), Path("/bk/v.srt"), "no corresponde")
 
-    assert store.was_tried(Path("/v.mkv"), "subdivx", "1")
-    assert not store.was_tried(Path("/v.mkv"), "subdivx", "2")
+    assert store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=2)
+    assert not store.was_tried(Path("/v.mkv"), "subdivx", "2", verifier=2)
     assert store.cached_search("subdivx", "house s01e01", timedelta(days=1)) == [candidate]
     assert store.cached_search("subdivx", "house s01e01", timedelta(seconds=-1)) is None
     assert store.cached_search("subdivx", "otra", timedelta(days=1)) is None
@@ -53,23 +53,41 @@ def test_attempts_searches_and_actions(tmp_path):
     assert (action.action, action.file, action.backup) == ("respaldado", "/v.srt", "/bk/v.srt")
 
 
-def test_old_databases_get_the_detected_column(tmp_path):
+def test_old_databases_get_the_new_columns(tmp_path):
     import sqlite3
     from contextlib import closing
 
     path = tmp_path / "subs.db"
-    with closing(sqlite3.connect(path)) as conn, conn:  # esquema anterior a la columna `detected`
+    with closing(sqlite3.connect(path)) as conn, conn:  # esquema anterior a `detected` y `verifier`
         conn.execute(
             "CREATE TABLE videos (path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime REAL NOT NULL, "
             "status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', subtitle_path TEXT, reference TEXT, score REAL, "
             "updated_at TEXT NOT NULL, retry_after TEXT, sidecars TEXT NOT NULL DEFAULT '')"
         )
+        conn.execute(
+            "CREATE TABLE attempts (video_path TEXT NOT NULL, source TEXT NOT NULL, candidate_id TEXT NOT NULL, "
+            "verdict TEXT NOT NULL, score REAL, tried_at TEXT NOT NULL, PRIMARY KEY (video_path, source, candidate_id))"
+        )
         conn.execute("INSERT INTO videos (path, size, mtime, status, updated_at) VALUES ('/v.mkv', 1, 2.0, 'ok', 'x')")
+        conn.execute("INSERT INTO attempts VALUES ('/v.mkv', 'subdivx', '1', 'dudoso', 0.2, 'x')")
 
     store = SubtitleStore(path)
 
     record = store.get_video(Path("/v.mkv"))
-    assert record is not None and record.status == "ok" and record.detected == ""
+    assert record is not None and record.status == "ok" and record.detected == "" and record.verifier == 1
+    # los intentos viejos quedan como hechos con la primera version de la verificacion
+    assert store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=1)
+    assert not store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=2)
+
+
+def test_attempts_with_an_older_verification_do_not_count_as_tried(tmp_path):
+    store = SubtitleStore(tmp_path / "subs.db")
+
+    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "dudoso", 0.2, verifier=1)
+    assert not store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=2)
+
+    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "corregible", 0.5, verifier=2)
+    assert store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=2)
 
 
 def test_detection_cache_round_trip(tmp_path):
@@ -89,6 +107,6 @@ def test_detection_cache_round_trip(tmp_path):
 def test_unusable_archives_recorded_by_older_versions_do_not_count_as_tried(tmp_path):
     store = SubtitleStore(tmp_path / "subs.db")
 
-    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "sin_srt_utilizable", None)
+    store.add_attempt(Path("/v.mkv"), "subdivx", "1", "sin_srt_utilizable", None, verifier=1)
 
-    assert not store.was_tried(Path("/v.mkv"), "subdivx", "1")
+    assert not store.was_tried(Path("/v.mkv"), "subdivx", "1", verifier=1)
