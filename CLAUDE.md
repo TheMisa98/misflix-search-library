@@ -146,6 +146,8 @@ función necesite uno.
   reconstruidas desde el `CLAUDE.md` anterior con la marca **(reconstruida)**.
 - `docs/GIT_WORKFLOW.md` — ramas, convención de commits, detalle del hook de
   pre-push.
+- `docs/PENDIENTES.md` — lo que falta hacer, con el contexto para retomarlo. Lo que
+  se cierra se borra de ahí en la misma rama que lo cierra.
 - `docs/CHANGELOG.md` — se crea cuando exista la primera release publicada
   (actualmente sin versionar más allá de `0.1.0` en `pyproject.toml`).
 
