@@ -25,11 +25,21 @@ invertido en el tiempo (mismo ritmo y duraciones de lineas, pero sin
 relacion real con el dialogo), alineado con el mismo algoritmo. Asi el
 umbral no depende de cuanto dialogo tenga el episodio (en una serie muy
 hablada, cualquier cosa cae "sobre voz" por azar).
+
+La decision es por **significancia**: cuantas desviaciones estandar del azar
+separan el puntaje del modelo nulo (`SyncReport.significance`), no un umbral
+fijo de puntaje. Un umbral fijo no sirve para todos los subtitulos a la vez:
+uno correcto pero sincronizado a mano con menos precision (las subidas de
+2009 de House T6) queda en +0.12..+0.30, por debajo de lo que un subtitulo
+corto de otro episodio llega a sacar por azar (+0.24 con 25 lineas). En
+desviaciones, el azar no pasa de ~4.4 en ningun tamaño y los correctos dan
+6..35 (ver `_RULE`).
 """
 
 from __future__ import annotations
 
 import bisect
+import math
 from collections import Counter, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -45,6 +55,10 @@ from misflix.core.subtitles.text import dialogue_cues, drop_credits
 FRAMERATE_RATIOS = (1.0, 25 / 23.976, 23.976 / 25, 24 / 23.976, 23.976 / 24, 25 / 24, 24 / 25)
 MAX_JUMP_SECONDS = 20.0
 MIN_DIALOGUE_CUES = 20
+# Version de la verificacion (metrica + reglas de decision). Subirla cada vez
+# que cambie: los candidatos que fallaron y los videos dudosos o sin encontrar
+# con una version anterior se vuelven a evaluar.
+VERIFIER_VERSION = 2
 
 _BIN_SECONDS = 0.1
 _FINE_STEPS = (-0.06, -0.03, 0.0, 0.03, 0.06)
@@ -103,12 +117,14 @@ class SyncReport:
         verdict: Que hacer con el subtitulo (ver `SyncVerdict`).
         reference: Contra que se alineo.
         score: Puntaje tras alinear menos el del modelo nulo; mas alto es
-            mejor (ver `_THRESHOLDS` para los cortes de cada referencia).
+            mejor.
         in_sync_fraction: Fraccion de cues que el alineador no necesito mover
             (mas de `_IN_SYNC_TOLERANCE`).
         alignment: La transformacion encontrada, sobre `dialogue`.
         dialogue: Los cues de dialogo que se alinearon (los que miden la
             sincronia; ver `text.is_dialogue`).
+        significance: Cuantas desviaciones estandar del azar es `score`
+            (ver `_RULE` para los cortes).
     """
 
     verdict: SyncVerdict
@@ -117,18 +133,38 @@ class SyncReport:
     in_sync_fraction: float
     alignment: Alignment
     dialogue: tuple[Cue, ...]
+    significance: float = 0.0
 
 
-# (umbral para "coincide", umbral para "no coincide"); entre ambos: dudoso.
-# Calibrado en vivo con House S01E01 (4 subtitulos correctos de distintas
-# versiones vs 2 de otra serie que habia en la biblioteca): contra el
-# subtitulo ingles, los correctos dan +0.60..+0.64 y los de otra serie
-# +0.01..+0.03; contra la voz, los correctos +0.34..+0.43 y los de otra serie
-# +0.00..+0.05.
-_THRESHOLDS = {
-    ReferenceKind.SUBTITLES: (0.30, 0.12),
-    ReferenceKind.SPEECH: (0.20, 0.10),
-}
+@dataclass(frozen=True)
+class _Rule:
+    """Cuando un subtitulo "coincide" o "no coincide" con su video; entre ambos, dudoso.
+
+    Attributes:
+        match_significance: Coincide desde estas desviaciones sobre el azar...
+        match_score: ...y si ademas supera al azar por al menos esto (un
+            acuerdo minimo pero "significativo" en un subtitulo largo no
+            alcanza).
+        wrong_significance: Por debajo de esto es indistinguible del azar.
+    """
+
+    match_significance: float
+    match_score: float
+    wrong_significance: float
+
+
+# Calibrado en vivo (2026-11-22) con pares reales de House y Better Call Saul:
+# cada episodio con subtitulo ingles incrustado contra los subtitulos de
+# subdivx ya bajados, del mismo episodio, de otros de la misma temporada
+# (incluidos los vecinos, que comparten el resumen "previamente en..."), y de
+# otra serie; mas los mismos recortados a 25-200 lineas. De 1352 subtitulos de
+# otro episodio, contra el subtitulo o contra la voz, ninguno paso de 2.5
+# desvios salvo tres de 2.6 a 4.4: el de 2 horas de un estreno doble contra
+# otros episodios (con muchas lineas fuera del video el alineador junta mas
+# azar); recortados a 25-100 lineas, hasta 3.5. Los correctos dan 6..35 contra
+# el subtitulo; contra la voz, mediana 9 y un 14% indistinguible del azar (ver
+# `_Reference.check` en el servicio: la voz sola no saca archivos).
+_RULE = _Rule(match_significance=6.0, match_score=0.10, wrong_significance=3.0)
 
 
 class _Scorer(Protocol):
@@ -305,6 +341,7 @@ def _check(cues: Sequence[Cue], scorer: _Scorer) -> SyncReport:
     alignment, value = _best_alignment(dialogue, scorer)
     _, null_value = _best_alignment(_reversed(dialogue), scorer)
     score = value - null_value
+    significance = score / _chance_spread(null_value, len(dialogue))
 
     in_sync = sum(
         1
@@ -312,14 +349,24 @@ def _check(cues: Sequence[Cue], scorer: _Scorer) -> SyncReport:
         if abs(cue.start * alignment.ratio + offset - cue.start) <= _IN_SYNC_TOLERANCE
     ) / len(dialogue)
 
-    match_threshold, wrong_threshold = _THRESHOLDS[scorer.kind]
-    if score >= match_threshold:
+    if significance >= _RULE.match_significance and score >= _RULE.match_score:
         verdict = SyncVerdict.IN_SYNC if in_sync >= _IN_SYNC_FRACTION else SyncVerdict.FIXABLE
-    elif score <= wrong_threshold:
+    elif significance < _RULE.wrong_significance:
         verdict = SyncVerdict.WRONG
     else:
         verdict = SyncVerdict.UNCERTAIN
-    return SyncReport(verdict, scorer.kind, score, in_sync, alignment, dialogue)
+    return SyncReport(verdict, scorer.kind, score, in_sync, alignment, dialogue, significance)
+
+
+def _chance_spread(chance: float, count: int) -> float:
+    """Desviacion estandar de la diferencia entre dos fracciones de aciertos por azar.
+
+    Cada uno de los `count` cues "acierta" por azar con probabilidad
+    `chance` (lo que logro el modelo nulo): la diferencia entre dos de esas
+    fracciones independientes tiene varianza `2 p (1 - p) / n`.
+    """
+    p = min(0.98, max(0.02, chance))
+    return math.sqrt(2 * p * (1 - p) / count)
 
 
 def _best_alignment(cues: Sequence[Cue], scorer: _Scorer) -> tuple[Alignment, float]:
@@ -354,7 +401,12 @@ def _dynamic_alignment(
     "cortar" desde el mejor desfase previo a menos de `MAX_JUMP_SECONDS`
     (pagando `scorer.penalty`), siempre que el corte no mande el cue antes
     que el anterior (no se reordenan lineas).
+
+    Sin desfases candidatos (ninguna ancla a menos de `max_offset` de ningun
+    cue) no hay nada que alinear: se deja todo donde esta.
     """
+    if not offsets:
+        return [0.0] * len(starts)
     count = len(offsets)
     gain: Callable[[int, int], float] = lambda i, k: scorer.gain(starts[i] + offsets[k], ends[i] + offsets[k])  # noqa: E731
     totals = [gain(0, k) for k in range(count)]

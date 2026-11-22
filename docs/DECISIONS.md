@@ -251,3 +251,58 @@ SQLite serializa la base, pero no los archivos de la biblioteca. Se usa un `floc
 exclusivo y no bloqueante sobre `subs.lock` junto a la base: es del kernel, se libera
 solo si el proceso muere (no quedan candados huérfanos) y no agrega dependencias. La
 pasada que no lo obtiene no hace nada (`busy`).
+
+## 2026-11-22 — Probar los episodios vecinos cuando el exacto no verifica
+
+Verificado en vivo: en House T6 todos los episodios desde el E03 quedaban
+`no_encontrado`. La biblioteca (numeración de TVDB) parte el estreno doble "Broken" en
+E01+E02, y los subtítulos de subdivx de 2009 siguen la numeración de la emisión, donde es
+un solo E01: cada "S06Eyy" de subdivx es el E(yy+1) local. Alternativas descartadas:
+mapear numeraciones con TVDB/TMDB (otra API y otra dependencia, y no dice qué numeración
+usó cada uploader) o buscar por título de episodio (subdivx casi nunca lo pone en el
+título del candidato). Elegido: si nada del código exacto verifica, probar los candidatos
+de E−1 y E+1 con el mismo verificador, que es el que descarta los que no son (un
+subtítulo de otro episodio da ~0). Cuesta poco: las búsquedas y descargas de un vecino
+casi siempre ya están en caché, porque son las de ese mismo episodio.
+
+## 2026-11-22 — Verificar por significancia estadística, no por un umbral fijo de puntaje
+
+El umbral fijo (coincide desde +0.30 sobre el modelo nulo) se había calibrado con solo
+House S01E01, cuyos subtítulos correctos eran traducciones línea por línea del inglés
+(+0.60). Verificado en vivo con House T6: las subidas de 2009, sincronizadas a mano con
+~0.35s de imprecisión por línea, son del episodio correcto (la alineación queda con
+residuo mediano ~0 en todo el episodio) pero dan +0.12…+0.30, así que quedaban dudosas o
+descartadas. Y bajar el umbral no sirve: con pocas líneas el azar llega lejos (+0.24 con
+25 líneas de otro episodio). Se calibró con 1322 pares reales y subtítulos recortados
+(detalle en `docs/ARCHITECTURE.md` § Sincronía y verificación): en desvíos estándar
+sobre el azar, los subtítulos de otro episodio no pasan de 2.5 salvo 3 casos de hasta
+4.4 (el de 2 horas de un estreno doble contra otros episodios; 3.5 con pocas líneas) y
+los correctos dan 6…35. Regla: coincide desde 6 desvíos y +0.10; no coincide por debajo
+de 3. Con los mismos pares, los correctos aceptados pasan de 181 a 242 de 251 contra el
+subtítulo inglés y de 32 a 51 de 88 contra la voz, sin ningún falso positivo en 1352
+negativos (971 contra el subtítulo, 381 contra la voz). Alternativas medidas y descartadas: métricas que toleran otra segmentación
+de líneas (contar también finales que coinciden, continuaciones de una frase partida,
+recall de la referencia) suben la señal de los correctos pero también la cola del azar;
+en desvíos no separan mejor que la métrica actual, que se mantiene.
+
+## 2026-11-22 — La voz sola nunca saca un subtítulo de la biblioteca
+
+Verificado en vivo: con la verificación anterior, cuando el subtítulo inglés daba
+"dudoso", la voz como segunda opinión podía decidir "no coincide", y así se mandaron al
+respaldo 48 subtítulos correctos de House que el usuario había bajado a mano (con la
+regla nueva verifican todos). Contra la voz sola el 14% de los subtítulos correctos es
+indistinguible del azar: alcanza para confirmar, no para descartar. Ahora la voz como
+segunda opinión solo confirma, y un "no coincide" que viene solo de la voz deja el
+archivo donde está (marcado dudoso) hasta que aparezca uno verificado que lo reemplace.
+Para reparar lo hecho, si un video no tiene subtítulo bueno se re-verifican sus
+respaldos por "no corresponder" y se restauran los que la verificación actual no
+descartaría; no se restaura donde ya hay uno verificado.
+
+## 2026-11-22 — Versión de la verificación en la base
+
+Cada mejora de la verificación cambia qué candidatos sirven, pero los intentos fallidos
+quedaban registrados para siempre y los videos `dudoso`/`no_encontrado` esperaban 7
+días. Videos e intentos guardan ahora la versión con que se evaluaron
+(`VERIFIER_VERSION`, columna `verifier` con migración como la de `detected`): al
+subirla, la pasada siguiente reevalúa esos videos y vuelve a verificar los candidatos
+que fallaron. Solo cuesta CPU: las descargas están en caché.

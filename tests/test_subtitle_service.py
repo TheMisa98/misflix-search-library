@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from misflix.core.services import subtitle_service
 from misflix.core.services.subtitle_service import SubtitleService, SubtitleStatus
 from misflix.core.subtitles.media import MediaInfo, StreamInfo
 from misflix.core.subtitles.srt import Cue, format_srt, parse_srt
+from misflix.core.subtitles.sync import VERIFIER_VERSION, Alignment, ReferenceKind, SyncReport, SyncVerdict
 from misflix.infra import library
 from misflix.infra.cloudflare import CloudflareBlockedError
 from misflix.infra.media_probe import ExtractedReference, MediaProbeError
@@ -242,7 +244,84 @@ def test_candidates_that_fail_are_recorded_and_not_retried(lib):
     assert first.by_status == {SubtitleStatus.NOT_FOUND: 1}
     assert second.by_status == {SubtitleStatus.NOT_FOUND: 1}
     assert provider.downloads == ["wrong"]
-    assert service.store.was_tried(lib.episode, "fake", "wrong")
+    assert service.store.was_tried(lib.episode, "fake", "wrong", VERIFIER_VERSION)
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "el unico candidato no verifico"
+
+
+def test_not_found_says_when_the_repo_has_nothing_for_the_episode(lib):
+    service = lib.service(FakeProvider())
+
+    lib.run(service)
+
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake no tiene subtitulos de este episodio"
+
+
+def test_a_subtitle_numbered_as_the_next_episode_is_found_and_verified(lib):
+    # House T6: "Broken" es E01+E02 en la biblioteca y un solo E01 en subdivx,
+    # asi que el E03 local esta subido como S06E02
+    provider = FakeProvider(
+        {
+            "same-code": (candidate("same-code", "House M.D. S01E01"), make_zip("a.srt", OTHER_EPISODE)),
+            "next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", shifted(SPANISH, 2))),
+        }
+    )
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    written = lib.episode.with_name(lib.episode.stem + ".es.srt")
+    assert max(abs(a.start - b.start) for a, b in zip(read(written), SPANISH, strict=True)) < 0.1
+    assert provider.downloads == ["same-code", "next-code"]
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake #next-code, subido como S01E02"
+    assert service.store.was_tried(lib.episode, "fake", "next-code@S01E02", VERIFIER_VERSION)
+
+
+def test_neighbouring_episodes_are_not_tried_when_the_exact_one_verifies(lib):
+    provider = FakeProvider(
+        {
+            "same-code": (candidate("same-code", "House M.D. S01E01"), make_zip("a.srt", SPANISH)),
+            "next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", SPANISH)),
+        }
+    )
+
+    summary = lib.run(lib.service(provider))
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["same-code"]
+
+
+def test_a_pack_with_the_broadcast_numbering_gives_the_neighbouring_file(lib):
+    pack = io.BytesIO()
+    with zipfile.ZipFile(pack, "w") as archive:
+        archive.writestr("House 1x01.srt", format_srt(OTHER_EPISODE))
+        archive.writestr("House 1x02.srt", format_srt(SPANISH))
+    provider = FakeProvider({"pack": (candidate("pack", "House M.D. S01E01-11"), pack.getvalue())})
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["pack"]  # la segunda vez sale de la cache
+    assert service.store.was_tried(lib.episode, "fake", "pack", VERIFIER_VERSION)
+    assert service.store.was_tried(lib.episode, "fake", "pack@S01E02", VERIFIER_VERSION)
+
+
+def test_a_wrong_neighbour_is_rejected_by_the_verifier(lib):
+    provider = FakeProvider(
+        {"next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", OTHER_EPISODE))}
+    )
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.NOT_FOUND: 1}
+    assert not lib.episode.with_name(lib.episode.stem + ".es.srt").exists()
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake no tiene subtitulos de este episodio"
 
 
 def test_not_found_is_retried_only_after_the_waiting_period(lib):
@@ -256,6 +335,167 @@ def test_not_found_is_retried_only_after_the_waiting_period(lib):
     expired = VideoRecord(**{**record.__dict__, "retry_after": (datetime.now(UTC) - timedelta(1)).isoformat()})
     service.store.put_video(expired)
     assert service.needs_work(_video(lib))
+
+
+def test_uncertain_and_not_found_videos_are_re_evaluated_when_the_verification_improves(lib):
+    service = lib.service(FakeProvider())
+    lib.run(service)
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.status == SubtitleStatus.NOT_FOUND and record.verifier == VERIFIER_VERSION
+    assert not service.needs_work(_video(lib))
+
+    service.store.put_video(replace(record, verifier=VERIFIER_VERSION - 1))
+
+    assert service.needs_work(_video(lib))
+
+
+def test_finished_videos_are_not_re_evaluated_when_the_verification_improves(lib):
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))
+    service = lib.service()
+    lib.run(service)
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.status == SubtitleStatus.IN_SYNC
+
+    service.store.put_video(replace(record, verifier=VERIFIER_VERSION - 1))
+
+    assert not service.needs_work(_video(lib))
+
+
+def test_candidates_tried_with_an_older_verification_are_tried_again(lib):
+    provider = FakeProvider({"good": (candidate("good"), make_zip("b.srt", shifted(SPANISH, 2)))})
+    service = lib.service(provider)
+    service.store.add_attempt(lib.episode, "fake", "good", "dudoso", 0.2, verifier=VERIFIER_VERSION - 1)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["good"]
+
+
+def test_an_uncertain_subtitle_that_now_verifies_becomes_the_regular_one(lib):
+    uncertain = lib.episode.with_name(lib.episode.stem + ".es.dudoso.srt")
+    uncertain.write_text(format_srt(shifted(SPANISH, 3)))
+    service = lib.service()
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.FIXED: 1}
+    confirmed = lib.episode.with_name(lib.episode.stem + ".es.srt")
+    assert confirmed.exists() and not uncertain.exists()
+    assert max(abs(a.start - b.start) for a, b in zip(read(confirmed), SPANISH, strict=True)) < 0.1
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.subtitle_path == str(confirmed)
+    assert service.store.recent_actions()[0].action == "confirmado"
+
+
+def canned(verdict: SyncVerdict, reference: ReferenceKind, cues: list[Cue]) -> SyncReport:
+    dialogue = tuple(cues)
+    alignment = Alignment(ratio=1.0, offsets=tuple(0.0 for _ in dialogue))
+    return SyncReport(verdict, reference, 0.0, 1.0, alignment, dialogue, significance=0.0)
+
+
+@pytest.mark.parametrize(
+    ("by_subtitles", "by_speech", "expected"),
+    [
+        (SyncVerdict.UNCERTAIN, SyncVerdict.WRONG, (SyncVerdict.UNCERTAIN, ReferenceKind.SUBTITLES)),
+        (SyncVerdict.UNCERTAIN, SyncVerdict.FIXABLE, (SyncVerdict.FIXABLE, ReferenceKind.SPEECH)),
+        (SyncVerdict.WRONG, SyncVerdict.FIXABLE, (SyncVerdict.WRONG, ReferenceKind.SUBTITLES)),
+        (None, SyncVerdict.WRONG, (SyncVerdict.WRONG, ReferenceKind.SPEECH)),
+    ],
+)
+def test_the_speech_second_opinion_can_only_confirm(monkeypatch, by_subtitles, by_speech, expected):
+    monkeypatch.setattr(
+        subtitle_service,
+        "check_against_subtitles",
+        lambda cues, reference: canned(by_subtitles, ReferenceKind.SUBTITLES, list(cues)),
+    )
+    monkeypatch.setattr(
+        subtitle_service,
+        "check_against_speech",
+        lambda cues, speech, duration: canned(by_speech, ReferenceKind.SPEECH, list(cues)),
+    )
+    reference = subtitle_service._Reference(
+        subtitles=tuple(ENGLISH) if by_subtitles else None, speech=((0.0, 10.0),), duration=DURATION
+    )
+
+    report = reference.check(SPANISH)
+
+    assert report is not None and (report.verdict, report.reference) == expected
+
+
+@pytest.fixture
+def speech_only(lib, monkeypatch):
+    """El video sin subtitulo de referencia: solo se puede verificar contra la voz."""
+    audio_only = MediaInfo(duration=DURATION, streams=(ENGLISH_INFO.streams[0],))
+    monkeypatch.setattr(subtitle_service, "probe", lambda path: audio_only)
+    monkeypatch.setattr(
+        subtitle_service,
+        "extract_reference",
+        lambda path, subtitle, audio, workdir: ExtractedReference(subtitle_text=None, levels_db=[-20.0] * 100),
+    )
+    monkeypatch.setattr(subtitle_service, "detect_speech", lambda levels: [(0.0, 5.0)])
+    return lib
+
+
+def test_an_existing_subtitle_is_not_removed_on_the_voice_alone(speech_only, monkeypatch):
+    monkeypatch.setattr(
+        subtitle_service,
+        "check_against_speech",
+        lambda cues, speech, duration: canned(SyncVerdict.WRONG, ReferenceKind.SPEECH, list(cues)),
+    )
+    existing = speech_only.episode.with_suffix(".srt")
+    existing.write_text(format_srt(SPANISH))
+
+    summary = speech_only.run(speech_only.service())
+
+    assert summary.by_status == {SubtitleStatus.UNCERTAIN: 1}
+    assert existing.exists() and backups(speech_only.root) == []
+
+
+def wrongly_backed_up(lib, service: SubtitleService, cues: list[Cue]) -> tuple[Path, Path]:
+    """Simula un .srt que una version anterior mando al respaldo por "no corresponder"."""
+    original = lib.episode.with_suffix(".srt")
+    backup = lib.root / "respaldo" / "20261122-0000" / "House" / original.name
+    backup.parent.mkdir(parents=True)
+    backup.write_text(format_srt(cues))
+    detail = "no corresponde al video (no_coincide contra audio, puntaje +0.05)"
+    service.store.log_action(lib.episode, "respaldado", original, backup, detail)
+    return original, backup
+
+
+def test_a_subtitle_wrongly_backed_up_by_an_older_verification_is_restored(lib):
+    service = lib.service()
+    original, backup = wrongly_backed_up(lib, service, shifted(SPANISH, 3))
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.FIXED: 1}
+    assert max(abs(a.start - b.start) for a, b in zip(read(original), SPANISH, strict=True)) < 0.1
+    assert backup.exists()  # la copia del respaldo queda
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "se restauro un subtitulo que se habia descartado por error"
+    assert "restaurado" in [action.action for action in service.store.recent_actions()]
+
+
+def test_a_backed_up_subtitle_that_really_is_wrong_stays_in_the_backup(lib):
+    service = lib.service()
+    original, _ = wrongly_backed_up(lib, service, OTHER_EPISODE)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.NOT_FOUND: 1}
+    assert not original.exists()
+
+
+def test_nothing_is_restored_when_the_video_already_has_a_verified_subtitle(lib):
+    service = lib.service()
+    lib.episode.with_name(lib.episode.stem + ".es.srt").write_text(format_srt(SPANISH))
+    original, _ = wrongly_backed_up(lib, service, SPANISH)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.IN_SYNC: 1}
+    assert not original.exists()
 
 
 def test_a_new_sidecar_triggers_a_re_evaluation(lib):
@@ -394,7 +634,7 @@ def test_a_candidate_that_fails_to_download_is_skipped_and_not_marked_as_tried(l
 
     assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
     assert provider.downloads == ["gone", "good"]
-    assert not service.store.was_tried(lib.episode, "fake", "gone")
+    assert not service.store.was_tried(lib.episode, "fake", "gone", VERIFIER_VERSION)
 
 
 def test_a_provider_outage_leaves_the_video_pending_instead_of_crashing(lib):

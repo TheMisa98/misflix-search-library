@@ -39,6 +39,21 @@ def other_language(cues: list[Cue], seed: int = 99) -> list[Cue]:
     ]
 
 
+def hand_timed(cues: list[Cue], seed: int, jitter: float, split_every: int = 4) -> list[Cue]:
+    """Fansub sincronizado a mano: inicios con jitter gaussiano y algunas frases partidas en dos."""
+    rng = random.Random(seed)
+    out = []
+    for i, c in enumerate(cues):
+        start = c.start + rng.gauss(0, jitter)
+        end = c.end + rng.gauss(0, jitter)
+        if i % split_every == 0 and end - start > 2:
+            middle = (start + end) / 2 + rng.uniform(-0.3, 0.3)
+            out += [Cue(start, middle, f"a{i}"), Cue(middle + 0.05, end, f"b{i}")]
+        else:
+            out.append(Cue(start, max(start + 0.5, end), f"l{i}"))
+    return sorted(out, key=lambda c: c.start)
+
+
 def shifted(cues: list[Cue], offset: float, ratio: float = 1.0) -> list[Cue]:
     return [Cue(start=c.start * ratio + offset, end=c.end * ratio + offset, text=c.text) for c in cues]
 
@@ -110,6 +125,34 @@ def test_subtitle_from_another_episode_is_wrong():
     report = check_against_subtitles(unrelated, REFERENCE)
 
     assert report.verdict == SyncVerdict.WRONG
+
+
+def test_a_correct_but_hand_timed_subtitle_is_accepted():
+    # verificado en vivo: las subidas de 2009 de House T6 son del episodio pero
+    # con ~0.35s de imprecision por linea, y daban +0.12..+0.30 (dudosas con el
+    # viejo umbral fijo de +0.30)
+    report = check_against_subtitles(hand_timed(REFERENCE, seed=2, jitter=0.35), REFERENCE)
+
+    assert report.verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE)
+    assert report.score < 0.30 and report.significance >= 6
+
+
+def test_short_subtitles_from_another_episode_are_never_accepted():
+    # con pocas lineas el azar llega lejos (+0.24 con 25): por eso se decide
+    # por desviaciones sobre el azar y no por un umbral fijo de puntaje
+    reports = [
+        check_against_subtitles(make_timeline(seed, count=25, start=30 + (seed % 12) * 50), REFERENCE)
+        for seed in range(200, 260)
+    ]
+
+    assert max(r.score for r in reports) >= 0.15
+    assert all(r.verdict == SyncVerdict.WRONG for r in reports)
+
+
+def test_a_subtitle_far_from_every_reference_line_is_wrong_instead_of_crashing():
+    far_away = make_timeline(seed=5, count=40, start=REFERENCE[-1].end + 1000)
+
+    assert check_against_subtitles(far_away, REFERENCE).verdict == SyncVerdict.WRONG
 
 
 def test_speech_reference_fixes_an_offset():

@@ -524,20 +524,42 @@ por episodio) — ver `docs/DECISIONS.md`.
    contenido, el nombre no es confiable — en House había `.hi.srt` que eran de
    *Safe House*): sincronizado → se deja; desfasado → se corrige en el mismo
    archivo (el original va a `state_dir/subs-respaldo/<fecha>/<ruta>`); de otro
-   episodio/serie → se mueve al respaldo; dudoso → se deja.
+   episodio/serie según el subtítulo de referencia → se mueve al respaldo;
+   dudoso, o "no coincide" según la voz sola → se deja (la voz descarta el 14% de
+   los correctos: alcanza para confirmar, no para sacar un archivo). Un
+   `.es.dudoso.srt` que ahora verifica pasa a ser el `.es.srt`. Si no queda
+   ninguno bueno, antes de ir a subdivx se re-verifican los que una pasada
+   anterior mandó al respaldo por "no corresponder" y se restauran los que la
+   verificación actual no descartaría (verificado en vivo: la versión 1 de la
+   verificación dejaba que la voz, como segunda opinión, descartara 48
+   subtítulos correctos de House que el subtítulo inglés daba como dudosos).
 4. Si no quedó ninguno bueno, **subdivx**: busca `"<titulo> SxxEyy"` y
    `"<titulo> SxxE01"` (ahí aparecen los packs "S01E01-11"), o
    `"<titulo> <año>"` para películas; filtra por título normalizado + episodio
    (o por IMDb en películas, que subdivx casi siempre trae); ordena por parecido a
    la versión local (`core/subtitles/matching.py`); prueba hasta 6 candidatos no
    probados antes y escribe el primero que verifica como `<video>.es.srt`. Si
+   ningún candidato del episodio exacto verifica, repite con los del episodio
+   anterior y el siguiente (hasta 6 de cada uno): la numeración de la
+   biblioteca (TVDB) y la de subdivx (la de la emisión) se corren en uno cuando
+   un episodio doble cuenta como uno en una y como dos en la otra. Verificado en
+   vivo en House T6: "Broken" es E01+E02 en la biblioteca y un solo E01 en
+   subdivx, así que el "S06E03" de subdivx es *The Tyrant* y el E03 local es
+   *Epic Fail*. El verificador descarta los vecinos que no son; un pack se
+   prueba una vez por numeración (`<id>@S06E02` en la tabla de intentos). Si
    ninguno verifica pero hubo uno dudoso y el video no tiene nada en español, lo
-   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado).
+   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado). El
+   detalle de `no_encontrado` distingue "subdivx no tiene subtítulos de este
+   episodio" de "ninguno de los N candidatos verificó".
 5. Estado en SQLite (`state_dir/subs.db`, `infra/subtitle_store.py`): estado por
    video, candidatos probados (no se rebajan), búsquedas cacheadas 3 días y
-   registro de cada archivo escrito/respaldado (`misflix subs status`).
-   `no_encontrado`/`dudoso` se reintentan a los 7 días; `pendiente` (subdivx
-   bloqueado) a la hora; un video se reevalúa si cambia el archivo o sus `.srt`.
+   registro de cada archivo escrito/respaldado/restaurado (`misflix subs
+   status`). `no_encontrado`/`dudoso` se reintentan a los 7 días; `pendiente`
+   (subdivx bloqueado) a la hora; un video se reevalúa si cambia el archivo o sus
+   `.srt`. Videos e intentos guardan con qué versión de la verificación se
+   evaluaron (`VERIFIER_VERSION` en `core/subtitles/sync.py`): al subirla, los
+   `dudoso`/`no_encontrado` se reevalúan en la pasada siguiente y los candidatos
+   que fallaron se vuelven a verificar (la descarga ya está en caché).
 
 ### Sincronía y verificación (`core/subtitles/sync.py`)
 
@@ -554,19 +576,30 @@ puntaje tras alinear contra un **modelo nulo**: el mismo subtítulo invertido en
 tiempo, alineado igual. Contra subtítulo de referencia la métrica es qué fracción
 de inicios cae a ≤0.3s de un inicio de la referencia; contra audio, qué fracción
 de inicios cae junto a un *arranque* de voz (la alineación contra audio optimiza
-cobertura, pero esa métrica sola se dejaba engañar). **Calibrado en vivo** con
-House S01E01 (4 subtítulos correctos de distintas versiones vs los 2 de otra
-serie que había en la biblioteca):
+cobertura, pero esa métrica sola se dejaba engañar).
 
-| | correctos | de otra serie |
+La decisión es por **significancia**: cuántas desviaciones estándar del azar
+separan el puntaje del nulo (`SyncReport.significance`, varianza binomial
+`2p(1−p)/n` con `p` el acierto del nulo y `n` las líneas). Coincide desde 6
+desvíos con al menos +0.10 de diferencia; por debajo de 3 desvíos, no coincide;
+entre ambos, dudoso. **Calibrado en vivo** con 1322 pares reales (House y Better
+Call Saul con subtítulo inglés incrustado contra subtítulos de subdivx en caché:
+del mismo episodio, de otros de la misma temporada —los vecinos comparten el
+resumen "previamente en..."— y de otra serie), 500 de ellos también contra la
+voz, más los mismos recortados a 25–200 líneas:
+
+| | otro episodio/serie | correctos |
 |---|---|---|
-| contra el subtítulo inglés incrustado | +0.60 … +0.64 | +0.01 … +0.03 |
-| contra la voz del canal central | +0.34 … +0.43 | +0.00 … +0.05 |
+| contra el subtítulo inglés (971 negativos) | ≤ 2.5 desvíos; 3 casos de 2.6–4.4, todos el subtítulo de 2 horas del estreno doble de House T6 contra otro episodio; hasta 3.5 recortados a 25–100 líneas | 6 … 35 desvíos (subidas de 2009 sincronizadas a mano: +0.12 … +0.60) |
+| contra la voz del canal central (381 negativos) | ≤ 2.2 desvíos | mediana 9; 14% indistinguible del azar |
 
-y la corrección contra audio coincide con la de referencia (desfase −0.15s vs
-−0.14s; con cortes, 91–100% de las líneas a ≤0.3s de la posición correcta). Las
-líneas que no son diálogo (`[música]`, ♪, créditos del uploader) no participan
-de la alineación; los créditos además se sacan del archivo final.
+El umbral fijo anterior (coincide desde +0.30) rechazaba un tercio de los
+correctos sincronizados a mano y a la vez quedaba cerca de lo que un subtítulo
+corto de otro episodio saca por azar (+0.24 con 25 líneas). La corrección contra
+audio coincide con la de referencia (desfase −0.15s vs −0.14s; con cortes,
+91–100% de las líneas a ≤0.3s de la posición correcta). Las líneas que no son
+diálogo (`[música]`, ♪, créditos del uploader) no participan de la alineación;
+los créditos además se sacan del archivo final.
 
 ### Módulos
 
