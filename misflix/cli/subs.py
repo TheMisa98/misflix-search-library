@@ -15,7 +15,7 @@ from typing import Annotated
 
 import typer
 
-from misflix.config.settings import get_settings
+from misflix.config.settings import Settings, get_settings, user_config_file
 from misflix.core.services.subtitle_service import (
     LibraryVideo,
     RunSummary,
@@ -53,6 +53,13 @@ def run(
         force: Reevaluar aunque el estado guardado diga que está listo.
         no_download: No buscar en subdivx.
     """
+    settings = get_settings()
+    if path is not None and _outside_library(path, settings):
+        view.info(
+            f"[yellow]{path} no está dentro de la biblioteca[/yellow] (películas: {settings.movies_dir}, "
+            f"series: {settings.series_dir}). Revisa MISFLIX_MOVIES_DIR/MISFLIX_SERIES_DIR en {user_config_file()}."
+        )
+        raise typer.Exit(1)
     service = _service(log=view.info)
     summary = _run_once(service, path, force=force, download=not no_download, verbose=True)
     if summary.busy:
@@ -214,6 +221,13 @@ def _run_once(
         on_progress=progress,
         on_result=on_result,
     )
+
+
+def _outside_library(path: Path, settings: Settings) -> bool:
+    """Indica si `path` no cae bajo las carpetas de la biblioteca (una pasada ahi no evaluaria nada)."""
+    target = path.resolve()
+    roots = (settings.movies_dir.resolve(), settings.series_dir.resolve())
+    return not any(target == root or root in target.parents for root in roots)
 
 
 def _pass_line(summary: RunSummary, wait: timedelta) -> str:

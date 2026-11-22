@@ -4,8 +4,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import typer
 
-from misflix.cli.subs import _OUTCOMES, _pass_line, _PassNotices, _retry_note, _video_name
+from misflix.cli import subs
+from misflix.cli.subs import _OUTCOMES, _outside_library, _pass_line, _PassNotices, _retry_note, _video_name
+from misflix.config.settings import Settings
 from misflix.core.services.subtitle_service import LibraryVideo, RunSummary, SubtitleStatus, VideoRecord
 
 
@@ -140,3 +143,32 @@ def test_the_pass_line_says_what_was_done_and_when_the_next_one_is():
     line = _pass_line(summary, timedelta(minutes=15))
 
     assert line == "pasada terminada: 3 videos evaluados (2 descargado, 1 dudoso); la proxima en 15 min"
+
+
+def library(root: Path) -> Settings:
+    return Settings(
+        movies_dir=root / "Peliculas",
+        books_dir=root / "Libros",
+        series_dir=root / "Series",
+        state_dir=root / "estado",
+        cache_dir=root / "cache",
+    )
+
+
+def test_paths_outside_the_library_are_detected(tmp_path):
+    settings = library(tmp_path)
+
+    assert not _outside_library(tmp_path / "Series" / "House" / "Season 1" / "house.s01e01.mkv", settings)
+    assert not _outside_library(tmp_path / "Peliculas", settings)
+    assert _outside_library(tmp_path / "Descargas" / "house.s01e01.mkv", settings)
+    assert _outside_library(tmp_path / "SeriesViejas" / "x.mkv", settings)  # no alcanza con que empiece igual
+
+
+def test_run_refuses_a_path_outside_the_library_instead_of_evaluating_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(subs, "get_settings", lambda: library(tmp_path))
+    monkeypatch.setattr(subs, "_service", lambda log: pytest.fail("no deberia armar el servicio"))
+
+    with pytest.raises(typer.Exit) as exit_info:
+        subs.run(path=tmp_path / "Descargas" / "x.mkv", force=False, no_download=False)
+
+    assert exit_info.value.exit_code == 1

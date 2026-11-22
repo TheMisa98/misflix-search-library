@@ -322,3 +322,22 @@ pasada sobre una biblioteca grande, terminaría en decenas de avisos: el resto v
 contado en un solo aviso al final. Ese aviso también incluye lo que cambió los
 subtítulos de videos ya conocidos: bajados, resincronizados, dudosos nuevos o
 restaurados. Un video que sigue igual no avisa.
+
+## 2026-11-22 — Configuración del usuario en `~/.config/misflix/.env`
+
+Verificado en vivo: el `misflix` instalado con `uv tool install` no leía el `.env` del
+repo. `load_dotenv()` sin argumentos busca el archivo subiendo desde el código que lo
+llama, y el instalado vive en la carpeta de herramientas de uv. Sin las carpetas
+configuradas usaba las de `~/Descargas`. Así, `misflix subs run RUTA` evaluaba 0
+videos sin avisar, y una descarga de películas o series habría ido a
+`~/Descargas/Peliculas|Series` en vez de a la biblioteca. No pasó: esas carpetas no
+existen. El servicio no se veía afectado porque su unidad de systemd trae las rutas.
+
+Ahora la configuración también se lee de `~/.config/misflix/.env` (`$XDG_CONFIG_HOME`,
+el lugar estándar para la configuración del usuario), corra desde donde corra el
+comando. El `.env` del repo se busca en una ruta fija junto al código (ya no subiendo
+directorios) y sigue teniendo prioridad al correr con `uv run`. Ninguno pisa las
+variables de entorno reales. `config show` dice qué archivos se leyeron, y `subs run`
+rechaza una ruta fuera de la biblioteca en vez de no hacer nada en silencio.
+Descartado: grabar las rutas en el binario al instalarlo. Habría que reinstalar para
+cambiar una carpeta.

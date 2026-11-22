@@ -130,7 +130,9 @@ función necesite uno.
   (`<series_dir>/<Series>/Season NN/...`) bajo `/mnt/misflix/Misflix/Series` — ver
   `docs/ARCHITECTURE.md`.
 - Variables de entorno `MISFLIX_MOVIES_DIR`/`MISFLIX_SERIES_DIR`/`MISFLIX_BOOKS_DIR`
-  en `.env` (ver `.env.example`), leídas por `misflix/config/settings.py`.
+  (ver `.env.example`), leídas por `misflix/config/settings.py` de
+  `~/.config/misflix/.env` (lo que lee el `misflix` instalado, corra desde donde
+  corra) y del `.env` del repo (con prioridad, al correr con `uv run`).
 - Un solo provider real de películas/series hoy: `zona-leros` (Cloudflare Managed
   Challenge). Libros: `lectulandia`. Subtítulos: `subdivx` (mismo Cloudflare).
   Antes de agregar uno nuevo, revisar si `docs/DECISIONS.md` ya cubre un patrón

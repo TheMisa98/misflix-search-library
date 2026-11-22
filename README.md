@@ -172,8 +172,12 @@ Requiere Kitty como terminal (con `kitten` disponible en el `PATH`) y el binario
 
 ```bash
 uv sync
-cp .env.example .env
+mkdir -p ~/.config/misflix && cp .env.example ~/.config/misflix/.env   # y editar las carpetas
 ```
+
+El comando instalado (`misflix ...`, corra desde donde corra) lee la configuración de
+`~/.config/misflix/.env`. Un `.env` en el repo también sirve al correr con `uv run`, y
+ahí tiene prioridad.
 
 ## Uso
 
@@ -193,7 +197,8 @@ Dejarlo en blanco es lo unico que termina el comando.
 
 ## Variables de entorno
 
-Ver `.env.example`:
+Ver `.env.example` (van en `~/.config/misflix/.env`; `uv run main.py config show` dice qué
+archivos se leyeron):
 
 - `MISFLIX_MOVIES_DIR` — carpeta por defecto para peliculas.
 - `MISFLIX_SERIES_DIR` — carpeta por defecto para series.
