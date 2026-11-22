@@ -78,7 +78,9 @@ def show_actions(rows: Sequence[tuple[str, str, str | None, str | None, str]]) -
     table.add_column("Archivo", overflow="fold")
     table.add_column("Respaldo / detalle", overflow="fold")
     for at, action, file, backup, detail in rows:
-        table.add_row(at.replace("T", " ")[:19], action, _short(file or ""), backup or detail)
+        table.add_row(
+            at.replace("T", " ")[:19], action, _short(file or ""), f"→ {_short(backup)}" if backup else detail
+        )
     console.print(table)
 
 

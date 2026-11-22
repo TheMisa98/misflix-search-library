@@ -155,3 +155,14 @@ def test_rank_candidates_prefers_the_cut_with_the_same_duration():
 
     assert [c.id for c in rank_candidates([bluray, remaster], local, duration=5572.0)] == ["new", "old"]
     assert [c.id for c in rank_candidates([bluray, remaster], local, duration=5506.5)] == ["old", "new"]
+
+
+def test_a_different_cut_from_the_same_group_loses_to_the_same_duration():
+    # caso real: el REMUX local (1:31:46) y dos candidatos de subdivx
+    local = release_profile("Tokyo Godfathers (2003) Remux-1080p.mkv", "Tokyo.Godfathers.2003.1080p.REMUX.DTS-HD-FGT")
+    remastered = candidate(
+        "Tokyo Godfathers (2003)", "Para la versión REMASTERED.1080p.BluRay.x264.DTS-FGT dura 1:32:53", 355, id_="r"
+    )
+    same_cut = candidate("Tokyo Godfathers (2003)", "Para la edición Bluray de 1:31:46 de duración", 1546, id_="b")
+
+    assert [c.id for c in rank_candidates([remastered, same_cut], local, duration=5506.8)] == ["b", "r"]

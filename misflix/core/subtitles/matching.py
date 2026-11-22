@@ -337,12 +337,15 @@ def _duration_score(description: str, duration: float | None) -> float:
     if not mentioned:
         return 0.0
     closest = min(abs(value - duration) for value in mentioned)
-    # la misma duracion es el mismo corte: pesa tanto como el mismo grupo de release
+    # La misma duracion es el mismo corte: pesa tanto como el mismo grupo de
+    # release. Mas de un minuto de diferencia es *otro* corte aunque sea del
+    # mismo grupo (verificado en vivo: el REMUX de Tokyo Godfathers dura
+    # 1:31:46 y el subtitulo "para ...DTS-FGT" era de la Remastered, 1:32:53).
     if closest <= 20:
         return 6.0
-    if closest <= 90:
-        return 1.0
-    return -3.0 if closest > 180 else 0.0
+    if closest <= 60:
+        return 0.0
+    return -4.0
 
 
 def _strip_episode_code(title: str) -> str:
