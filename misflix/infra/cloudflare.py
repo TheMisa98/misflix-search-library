@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import time
 import typing
+from collections.abc import Mapping
+from urllib.parse import urljoin
 
 from curl_cffi import BrowserTypeLiteral
 from curl_cffi import requests as curl_requests
@@ -84,6 +86,7 @@ class CloudflareHttpClient:
         timeout: float = 15.0,
         resolve_timeout: float = 180.0,
         poll_interval: float = 2.0,
+        on_challenge: typing.Callable[[str], None] | None = None,
     ):
         """Inicializa el cliente.
 
@@ -96,6 +99,9 @@ class CloudflareHttpClient:
                 nueva tras abrir el navegador.
             poll_interval: Cada cuanto revisar si ya aparecio la cookie
                 nueva.
+            on_challenge: Se llama con el dominio justo antes de abrir el
+                navegador (ej. para mandar una notificacion de escritorio
+                desde el proceso en segundo plano, que no tiene terminal).
         """
         self.domain = domain
         self.user_agent = user_agent
@@ -103,6 +109,7 @@ class CloudflareHttpClient:
         self.timeout = timeout
         self.resolve_timeout = resolve_timeout
         self.poll_interval = poll_interval
+        self.on_challenge = on_challenge
 
     def get(self, url: str) -> Response:
         """Pide `url`, escalando a resolucion manual si sale desafiado.
@@ -122,6 +129,36 @@ class CloudflareHttpClient:
         if _is_challenge(response):
             self._resolve_via_browser(url)
             response = self._request(url)
+            if _is_challenge(response):
+                raise CloudflareBlockedError(f"Cloudflare sigue bloqueando {url} despues de la verificacion manual.")
+        response.raise_for_status()
+        return response
+
+    def post(self, url: str, data: Mapping[str, str], headers: Mapping[str, str] | None = None) -> Response:
+        """Hace un POST de formulario a `url`, escalando a resolucion manual si sale desafiado.
+
+        Como un POST no se puede "abrir" en el navegador, la verificacion
+        manual se hace sobre la raiz del sitio (la `cf_clearance` vale para
+        todo el dominio) y despues se reintenta el POST.
+
+        Args:
+            url: Url a la que postear.
+            data: Campos del formulario (`application/x-www-form-urlencoded`).
+            headers: Headers extra (ej. `X-Requested-With` para endpoints AJAX).
+
+        Returns:
+            La respuesta HTTP, ya sin desafio.
+
+        Raises:
+            CloudflareBlockedError: Si sigue desafiado despues de la
+                verificacion manual.
+            curl_cffi.requests.exceptions.HTTPError: Si la respuesta final no
+                es 2xx.
+        """
+        response = self._post_request(url, data, headers)
+        if _is_challenge(response):
+            self._resolve_via_browser(urljoin(url, "/"))
+            response = self._post_request(url, data, headers)
             if _is_challenge(response):
                 raise CloudflareBlockedError(f"Cloudflare sigue bloqueando {url} despues de la verificacion manual.")
         response.raise_for_status()
@@ -166,6 +203,27 @@ class CloudflareHttpClient:
             timeout=self.timeout,
         )
 
+    def _post_request(self, url: str, data: Mapping[str, str], headers: Mapping[str, str] | None) -> Response:
+        """Hace un POST a `url` impersonando un navegador real.
+
+        Args:
+            url: Url a la que postear.
+            data: Campos del formulario.
+            headers: Headers extra.
+
+        Returns:
+            La respuesta HTTP cruda (puede venir desafiada).
+        """
+        cookies = load_domain_cookies(self.domain)
+        return curl_requests.post(
+            url,
+            impersonate=self.impersonate,
+            cookies=cookies,
+            headers={"User-Agent": self.user_agent, **(headers or {})},
+            data=dict(data),
+            timeout=self.timeout,
+        )
+
     def _resolve_via_browser(self, url: str) -> None:
         """Abre `url` en el navegador del usuario y espera una `cf_clearance` nueva.
 
@@ -178,6 +236,8 @@ class CloudflareHttpClient:
         """
         baseline = load_domain_cookies(self.domain).get("cf_clearance")
         print(f"[misflix] Cloudflare pide verificacion en {self.domain}. Abriendo el navegador...")
+        if self.on_challenge is not None:
+            self.on_challenge(self.domain)
         open_in_browser(url)
 
         deadline = time.monotonic() + self.resolve_timeout

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from misflix.core.models import Author, DownloadOption, Media, MediaKind
+from misflix.core.models import Author, DownloadedFile, DownloadOption, Media, MediaKind, SubtitleCandidate
 
 ProgressCallback = Callable[[int, int], None]
 
@@ -146,6 +146,55 @@ class AuthorProvider(SourceProvider, Protocol):
         Returns:
             Libros del autor, solo los de su pagina (sin resultados por
             texto ni series).
+        """
+        ...
+
+
+class SubtitleProviderError(RuntimeError):
+    """El repo de subtitulos fallo (caido, respuesta inesperada, descarga que no existe).
+
+    Los providers envuelven en esta excepcion cualquier error de red o de
+    formato, asi el servicio puede tratarlos sin conocer el cliente HTTP que
+    usa cada uno. Un desafio de Cloudflare sin resolver es otra cosa
+    (`CloudflareBlockedError`): ahi el repo no esta caido, falta el usuario.
+    """
+
+
+@runtime_checkable
+class SubtitleProvider(Protocol):
+    """Contrato de un repo de subtitulos (hoy subdivx).
+
+    Separado de `SourceProvider` (ISP): un repo de subtitulos no tiene fichas
+    de peliculas ni opciones de descarga de video, solo candidatos de
+    subtitulo para una busqueda y el archivo (zip/rar/srt) de cada uno.
+
+    Attributes:
+        name: Nombre unico del provider.
+    """
+
+    name: str
+
+    def search(self, query: str) -> list[SubtitleCandidate]:
+        """Busca subtitulos para `query` (ej. "House M.D. S01E01" o "Allied (2016)").
+
+        Args:
+            query: Texto de busqueda.
+
+        Returns:
+            Candidatos tal como los lista el repo, sin filtrar por titulo:
+            la busqueda suele ser por substring y trae otras series/peliculas
+            (filtrarlas es responsabilidad de `core/subtitles/matching.py`).
+        """
+        ...
+
+    def download(self, candidate: SubtitleCandidate) -> DownloadedFile:
+        """Descarga el archivo de `candidate`, tal cual lo sirve el repo.
+
+        Args:
+            candidate: Candidato devuelto por `search`.
+
+        Returns:
+            El archivo (normalmente un .zip o .rar con uno o mas .srt).
         """
         ...
 

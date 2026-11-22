@@ -30,14 +30,16 @@ este archivo se actualiza en el mismo cambio (ver regla en `CLAUDE.md`).
   cada uno desde su propio módulo de `infra/`) se re-exporta desde
   `core/services/download_service.py` — el único punto de contacto entre la
   capa de comandos y los detalles técnicos (`LINK_ERRORS`, `ExtractionError`,
-  `is_mediafire_url`, `sanitize_filename`).
+  `is_mediafire_url`, `sanitize_filename`). Lo mismo para subtítulos:
+  `cli/subs.py` toma todo (incluido `LibraryVideo`, `notify`, `open_store`) de
+  `core/services/subtitle_service.py`.
 - `misflix/cli/` y `misflix/ui/` son la única capa que puede importar
   Typer/Rich/`kitten` — el dominio no sabe que existe una terminal.
 
 Lo que sí se sigue cumpliendo sin excepción: ninguna implementación
 *intercambiable* de un detalle técnico se importa directo. Eso está reforzado
 hoy por `core/ports.py`'s `Protocol`s (`SourceProvider`, `SeriesProvider`,
-`Downloader`) y por `base.HttpGetClient`, un `Protocol` estructural que deja a
+`AuthorProvider`, `SubtitleProvider`, `Downloader`) y por `base.HttpGetClient`, un `Protocol` estructural que deja a
 `ZonaLerosProvider` inyectar `CloudflareHttpClient` donde un `StaticProvider`
 común espera `HttpGetClient`, sin acoplarse a ninguna clase concreta.
 
@@ -453,9 +455,150 @@ services, or UI:
   multi-line paste doesn't interleave with the prompt) and `progress_bar` (per-part rich
   progress).
 - **`misflix/config/settings.py`** — reads `MISFLIX_MOVIES_DIR` / `MISFLIX_SERIES_DIR` /
-  `MISFLIX_BOOKS_DIR` from `.env` (see `.env.example`) via `python-dotenv`.
+  `MISFLIX_BOOKS_DIR` from `.env` (see `.env.example`) via `python-dotenv`, plus
+  `state_dir` (`$XDG_STATE_HOME/misflix`, default `~/.local/state/misflix`: the
+  subtitle SQLite DB and the backups of replaced `.srt`) and `cache_dir`
+  (`$XDG_CACHE_HOME/misflix`: regenerable per-video sync references and downloaded
+  subtitle archives).
   `download.run_download_flow` picks between them based on `media.kind` — no
   destination prompt anymore.
+
+## Subtítulos en español (`misflix subs`)
+
+Mantiene subtítulos en español para la biblioteca: detecta qué videos los
+necesitan, **verifica** los `.srt` que ya hay (muchos se bajaron a mano y nunca se
+revisaron), corrige los desfasados y baja de subdivx los que faltan. Corre en
+segundo plano como servicio de systemd de usuario (`misflix subs install-service`
+→ `misflix subs daemon`). Bazarr (que ya corre en el stack) no sirve para subdivx:
+su provider `subx` depende de una API de terceros con api key, la web tiene
+Cloudflare, y los subtítulos vienen en `.zip`/`.rar` (a veces packs con un `.srt`
+por episodio) — ver `docs/DECISIONS.md`.
+
+### Flujo por video (`SubtitleService.process`)
+
+1. `ffprobe` (cacheado en SQLite por size+mtime). Se **salta** si tiene audio en
+   español, una pista de subtítulos en español no forzada, o el nombre lo dice
+   ("CASTELLANO", "SUBTITULADO ESPAÑOL", "DUAL"). El idioma de una pista sale del
+   tag **o del título**: verificado en vivo, en The Big Bang Theory hay pistas
+   `und` tituladas "Latino"/"Inglés" (`core/subtitles/media.py`).
+   Si los metadatos no lo dicen, antes de leer el video entero se **escucha y se
+   mira** (`infra/spanish_detection.py`, `core/subtitles/detection.py`, cacheado
+   en la tabla `detections`):
+   - **Whisper**, solo sobre pistas de audio **sin etiqueta de idioma** (a un
+     `eng`/`jpn` se le cree). Fedora empaqueta whisper.cpp solo como librería
+     (`libwhisper.so`, sin CLI — verificado en vivo), así que se llama con
+     `ctypes` desde `infra/whisper_lid.py`, **en un proceso aparte y en CPU**:
+     el backend HIP del paquete tira SIGFPE en la RX 5700 XT (gfx1010, sin
+     soporte de ROCm) y con `HSA_OVERRIDE_GFX_VERSION` se cuelga. Modelo
+     multilingüe "base" (se baja una vez a `cache_dir/subs/whisper/`), ~10s por
+     fragmento de 25s (la librería de Fedora no usa AVX2). Empieza con 2
+     fragmentos y agrega de a uno hasta 5; gana el idioma con ≥2 votos
+     confiables (p ≥ 0.75) y sin empate — en tramos sin diálogo Whisper
+     "alucina" idiomas (Kill the Jockey: japonés al 88% sobre música).
+   - **Tesseract** (`-l spa`, salida TSV, solo palabras con confianza ≥ 60) sobre
+     la franja inferior central de hasta 20 fotogramas, binarizada (texto claro
+     → negro), cortando apenas hay texto suficiente.
+
+   **Verificado en vivo** sobre los 15 videos de la biblioteca sin subtítulo de
+   referencia y con audio estéreo: Kimetsu no Yaiba T3 (10 episodios, audio
+   `jpn` bien etiquetado) → subtítulos en español quemados; The Aviator, Osmosis
+   Jones, Project Almanac, Ratatouille (pistas sin idioma) → doblados; Kill the
+   Jockey → hablada en español. Controles: House S01E01 y Tokyo Godfathers →
+   necesitan subtítulos. Los fragmentos y fotogramas se buscan con `-ss` antes
+   de `-i` (no se lee el archivo entero); los fotogramas se decodifican con
+   `-hwaccel auto` (con `mesa-va-drivers` de Fedora VAAPI no decodifica
+   H.264/HEVC y ffmpeg vuelve solo a la CPU). Sin esas herramientas la detección
+   se saltea; si se instalan después, los videos evaluados sin ellas se
+   reevalúan (columna `detected`).
+2. **Referencia de sincronía**, extraída en una sola lectura del archivo con
+   `ffmpeg -vn` (nunca decodifica video: no hay trabajo para la GPU) y cacheada en
+   `cache_dir/subs/referencias/`:
+   - la pista de subtítulos de texto en otro idioma (preferida: ya está
+     sincronizada con *ese* video; en House viene el inglés incrustado);
+   - y los niveles RMS cada 50ms del **canal central** (FC) del audio, donde va
+     el diálogo en 5.1/7.1 sin música ni efectos (`infra/media_probe.py`,
+     `core/subtitles/speech.py`). Verificado en vivo: leer el archivo tarda
+     ~45-85s por episodio de 45min en el disco NTFS (casi todo I/O; corre con
+     `ionice -c3`/`nice 19`).
+3. **Verificación de los `.srt` en español existentes** (el idioma se detecta por
+   contenido, el nombre no es confiable — en House había `.hi.srt` que eran de
+   *Safe House*): sincronizado → se deja; desfasado → se corrige en el mismo
+   archivo (el original va a `state_dir/subs-respaldo/<fecha>/<ruta>`); de otro
+   episodio/serie → se mueve al respaldo; dudoso → se deja.
+4. Si no quedó ninguno bueno, **subdivx**: busca `"<titulo> SxxEyy"` y
+   `"<titulo> SxxE01"` (ahí aparecen los packs "S01E01-11"), o
+   `"<titulo> <año>"` para películas; filtra por título normalizado + episodio
+   (o por IMDb en películas, que subdivx casi siempre trae); ordena por parecido a
+   la versión local (`core/subtitles/matching.py`); prueba hasta 6 candidatos no
+   probados antes y escribe el primero que verifica como `<video>.es.srt`. Si
+   ninguno verifica pero hubo uno dudoso y el video no tiene nada en español, lo
+   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado).
+5. Estado en SQLite (`state_dir/subs.db`, `infra/subtitle_store.py`): estado por
+   video, candidatos probados (no se rebajan), búsquedas cacheadas 3 días y
+   registro de cada archivo escrito/respaldado (`misflix subs status`).
+   `no_encontrado`/`dudoso` se reintentan a los 7 días; `pendiente` (subdivx
+   bloqueado) a la hora; un video se reevalúa si cambia el archivo o sus `.srt`.
+
+### Sincronía y verificación (`core/subtitles/sync.py`)
+
+Alineación por tramos: cada línea de diálogo recibe un desfase elegido entre
+candidatos (picos del histograma de diferencias de inicios, global y por
+ventanas), con programación dinámica que cobra una penalización por cada corte
+y prohíbe saltos de más de 20s entre tramos; se prueban además las conversiones
+de framerate típicas (25 ↔ 23.976 ↔ 24). Esto corrige los subtítulos hechos para
+otra versión (cortes comerciales de HDTV, escenas de más/de menos), que un
+desfase constante no arregla.
+
+El veredicto (`sincronizado` / `corregible` / `dudoso` / `no_coincide`) compara el
+puntaje tras alinear contra un **modelo nulo**: el mismo subtítulo invertido en el
+tiempo, alineado igual. Contra subtítulo de referencia la métrica es qué fracción
+de inicios cae a ≤0.3s de un inicio de la referencia; contra audio, qué fracción
+de inicios cae junto a un *arranque* de voz (la alineación contra audio optimiza
+cobertura, pero esa métrica sola se dejaba engañar). **Calibrado en vivo** con
+House S01E01 (4 subtítulos correctos de distintas versiones vs los 2 de otra
+serie que había en la biblioteca):
+
+| | correctos | de otra serie |
+|---|---|---|
+| contra el subtítulo inglés incrustado | +0.60 … +0.64 | +0.01 … +0.03 |
+| contra la voz del canal central | +0.34 … +0.43 | +0.00 … +0.05 |
+
+y la corrección contra audio coincide con la de referencia (desfase −0.15s vs
+−0.14s; con cortes, 91–100% de las líneas a ≤0.3s de la posición correcta). Las
+líneas que no son diálogo (`[música]`, ♪, créditos del uploader) no participan
+de la alineación; los créditos además se sacan del archivo final.
+
+### Módulos
+
+- `core/subtitles/` — lógica pura, sin red ni disco: `srt.py` (parseo
+  tolerante/escritura, codificaciones cp1252/UTF-16), `text.py` (diálogo vs
+  ruido, créditos, idioma por palabras frecuentes), `speech.py`, `sync.py`,
+  `matching.py`, `media.py` (reglas sobre pistas).
+- `core/services/subtitle_service.py` — orquestación (compone `infra/` directo,
+  pide candidatos al `SubtitleProvider`).
+- `providers/subdivx.py` — `SubtitleProvider`. **Verificado en vivo**: Cloudflare
+  Managed Challenge igual que zona-leros (usa `CloudflareHttpClient`, ahora con
+  `post()` y un callback `on_challenge` para notificar antes de abrir el
+  navegador). La búsqueda es un POST a `/inc/ajax.php` con `tabla=resultados`,
+  `buscar<versión>` (`#vs` de la home, "v4.53" → `buscar453`) y un `token` de
+  `/inc/gt.php?gt=1`; todo funciona sin sesión. Descarga:
+  `/descargar.php?f=1&id=<id>` → `.zip`/`.rar` con el nombre en
+  `Content-Disposition`. Pedidos espaciados ≥1.5s.
+- `infra/archives.py` `extract_subtitle_archive` — `.zip` con `zipfile`, `.rar`
+  con `unrar e` (el `7z` de Fedora no trae el códec RAR, verificado en vivo),
+  anidados hasta 3 niveles, siempre *planos* (sin rutas: nada escapa del destino).
+- `infra/library.py` — recorre la biblioteca, lee `movie.nfo`/`tvshow.nfo`
+  (título original + traducido + IMDb: "House" en disco es "House M.D." en
+  subdivx) y lista los `.srt` de al lado.
+- `infra/media_probe.py`, `infra/subtitle_store.py`, `infra/notify.py`
+  (`notify-send`, para el proceso en segundo plano).
+- `cli/subs.py` + `ui/subtitles.py` — `run [RUTA] [--force] [--no-download]`,
+  `daemon`, `status [RUTA] [--todos]`, `sync VIDEO SRT`, `install-service`.
+  El daemon hace una pasada cada 15 min (NTFS vía `fuseblk` no da eventos de
+  inotify, se hace polling; con las cachés, una pasada sin trabajo es casi
+  gratis). Si subdivx queda bloqueado por Cloudflare, sigue verificando lo
+  existente sin descargas y espera 1h, 2h, 4h… (tope 8h) antes de volver a abrir
+  el navegador.
 
 ## Agregar un provider nuevo
 
