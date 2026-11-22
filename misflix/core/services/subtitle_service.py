@@ -163,6 +163,15 @@ class _Reference:
         return primary
 
 
+@dataclass(frozen=True)
+class _Found:
+    """Subtitulo bajado que verifico, ya escrito junto al video."""
+
+    path: Path
+    report: SyncReport
+    source: str  # "subdivx #123", o "subdivx #123, subido como S06E02" si vino de un vecino
+
+
 class SubtitleService:
     """Detecta, verifica, corrige y baja subtitulos en español para la biblioteca."""
 
@@ -390,19 +399,25 @@ class SubtitleService:
                 return _with(base, SubtitleStatus.UNCERTAIN, detail, _RETRY_NOT_FOUND, path, report)
             return _with(base, SubtitleStatus.PENDING, "falta bajar un subtitulo", _RETRY_PENDING)
 
-        found = self._download_best(video, info, reference)
+        found, offered = self._download_best(video, info, reference)
         if found is not None:
-            written, report, candidate = found
             for path, _ in existing:  # los dudosos que habia: ya hay uno verificado
-                if path.exists() and path != written:
+                if path.exists() and path != found.path:
                     self._backup(video.path, path, "reemplazado por uno verificado")
-            return _with(base, SubtitleStatus.DOWNLOADED, f"{candidate.source} #{candidate.id}", None, written, report)
+            return _with(base, SubtitleStatus.DOWNLOADED, found.source, None, found.path, found.report)
 
         uncertain = [item for item in existing if item[1].verdict == SyncVerdict.UNCERTAIN]
         if uncertain:
             path, report = uncertain[0]
             return _with(base, SubtitleStatus.UNCERTAIN, "verificacion no concluyente", _RETRY_NOT_FOUND, path, report)
-        return _with(base, SubtitleStatus.NOT_FOUND, "ningun candidato verifico", _RETRY_NOT_FOUND)
+        if offered == 0:
+            what = "este episodio" if video.kind == "episode" else "esta pelicula"
+            detail = f"{self.provider.name} no tiene subtitulos de {what}"
+        elif offered == 1:
+            detail = "el unico candidato no verifico"
+        else:
+            detail = f"ninguno de los {offered} candidatos verifico"
+        return _with(base, SubtitleStatus.NOT_FOUND, detail, _RETRY_NOT_FOUND)
 
     def _review_existing(self, video: LibraryVideo, reference: _Reference) -> list[tuple[Path, SyncReport]]:
         """Verifica cada .srt en español que ya esta junto al video y actua segun el veredicto.
@@ -428,51 +443,78 @@ class SubtitleService:
             reviewed.append((sidecar.path, report))
         return reviewed
 
-    def _download_best(
-        self, video: LibraryVideo, info: MediaInfo, reference: _Reference
-    ) -> tuple[Path, SyncReport, SubtitleCandidate] | None:
-        """Prueba candidatos del repo en orden hasta que uno verifique; lo escribe y lo devuelve."""
-        candidates = self._candidates(video, info)
+    def _download_best(self, video: LibraryVideo, info: MediaInfo, reference: _Reference) -> tuple[_Found | None, int]:
+        """Prueba candidatos del repo en orden hasta que uno verifique y lo escribe.
+
+        Primero los del episodio exacto y, si ninguno verifica, los de los
+        episodios vecinos: la numeracion de la biblioteca (la de TVDB) y la de
+        los subtitulos (la de la emision) se corren en uno cuando un episodio
+        doble cuenta como uno en una y como dos en la otra. Verificado en vivo:
+        en House T6 "Broken" es E01+E02 en la biblioteca y un solo E01 en
+        subdivx, asi que el "S06E03" de subdivx es "The Tyrant" y el E03 local
+        es "Epic Fail". El verificador descarta los vecinos que no son.
+
+        Returns:
+            Lo escrito (None si nada verifico) y cuantos candidatos ofrecio el
+            repo para el episodio exacto (o la pelicula).
+        """
         best_uncertain: tuple[float, list[Cue], SyncReport, SubtitleCandidate] | None = None
-        tried = 0
-        for candidate in candidates:
-            if tried >= self.max_candidates:
-                break
-            if self.store.was_tried(video.path, candidate.source, candidate.id):
-                continue
-            tried += 1
-            try:
-                outcome = self._try_candidate(video, candidate, reference)
-            except SubtitleProviderError as exc:
-                # no se registra como probado: puede ser pasajero (verificado en vivo:
-                # 404 durante una actualizacion del sitio)
-                self.log(f"  no se pudo bajar {candidate.source} #{candidate.id}: {exc}")
-                continue
-            if outcome is None:
-                # no se registra como probado: el archivo queda en cache y una
-                # version mejor de `pick_subtitle_files` puede encontrarle el .srt
-                self.log(f"  {candidate.source} #{candidate.id}: no se encontro el .srt del video adentro")
-                continue
-            cues, report = outcome
-            self.store.add_attempt(video.path, candidate.source, candidate.id, report.verdict, report.score)
-            if report.verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE):
-                fixed = apply_alignment(cues, report) if report.verdict == SyncVerdict.FIXABLE else drop_credits(cues)
-                detail = f"{candidate.source} #{candidate.id} ({_describe(report)})"
-                return self._write(video.path, fixed, detail), report, candidate
-            if report.verdict == SyncVerdict.UNCERTAIN and (best_uncertain is None or report.score > best_uncertain[0]):
-                best_uncertain = (report.score, cues, report, candidate)
+        offered = 0
+        for episode in _episodes_to_try(video):
+            candidates = self._candidates(video, info, episode)
+            numbered_as = None
+            if episode != video.episode and video.season is not None and episode is not None:
+                numbered_as = _episode_code(video.season, episode)
+            else:
+                offered = len(candidates)
+            tried = 0
+            for candidate in candidates:
+                if tried >= self.max_candidates:
+                    break
+                # un pack se prueba una vez por numeracion: de el sale otro .srt
+                key = f"{candidate.id}@{numbered_as}" if numbered_as else candidate.id
+                if self.store.was_tried(video.path, candidate.source, key):
+                    continue
+                tried += 1
+                try:
+                    outcome = self._try_candidate(video, candidate, reference, episode)
+                except SubtitleProviderError as exc:
+                    # no se registra como probado: puede ser pasajero (verificado en vivo:
+                    # 404 durante una actualizacion del sitio)
+                    self.log(f"  no se pudo bajar {candidate.source} #{candidate.id}: {exc}")
+                    continue
+                if outcome is None:
+                    # no se registra como probado: el archivo queda en cache y una
+                    # version mejor de `pick_subtitle_files` puede encontrarle el .srt
+                    self.log(f"  {candidate.source} #{candidate.id}: no se encontro el .srt del video adentro")
+                    continue
+                cues, report = outcome
+                self.store.add_attempt(video.path, candidate.source, key, report.verdict, report.score)
+                if report.verdict in (SyncVerdict.IN_SYNC, SyncVerdict.FIXABLE):
+                    fixed = (
+                        apply_alignment(cues, report) if report.verdict == SyncVerdict.FIXABLE else drop_credits(cues)
+                    )
+                    source = f"{candidate.source} #{candidate.id}"
+                    if numbered_as:
+                        source += f", subido como {numbered_as}"
+                    written = self._write(video.path, fixed, f"{source} ({_describe(report)})")
+                    return _Found(written, report, source), offered
+                if report.verdict == SyncVerdict.UNCERTAIN and (
+                    best_uncertain is None or report.score > best_uncertain[0]
+                ):
+                    best_uncertain = (report.score, cues, report, candidate)
 
         if best_uncertain is not None and not self._spanish_sidecars(video.path):
             # Mejor algo para probar que nada: queda marcado en el nombre y en el estado.
             _, cues, report, candidate = best_uncertain
             fixed = apply_alignment(cues, report)
             self._write(video.path, fixed, f"dudoso: {candidate.source} #{candidate.id}", suffix=_UNCERTAIN_SUFFIX)
-        return None
+        return None, offered
 
     def _try_candidate(
-        self, video: LibraryVideo, candidate: SubtitleCandidate, reference: _Reference
+        self, video: LibraryVideo, candidate: SubtitleCandidate, reference: _Reference, episode: int | None
     ) -> tuple[list[Cue], SyncReport] | None:
-        """Baja un candidato, elige el/los .srt en español para este video y devuelve el mejor verificado."""
+        """Baja un candidato, elige el/los .srt en español para `episode` y devuelve el mejor verificado."""
         downloaded = self._download(candidate)
         with tempfile.TemporaryDirectory(prefix="misflix-subs-") as tmp:
             try:
@@ -482,7 +524,7 @@ class SubtitleService:
                 return None
             root = Path(tmp) / "x"
             names = [str(path.relative_to(root)) for path in files]
-            chosen = pick_subtitle_files(names, video.season, video.episode, parse_episode_range(candidate.title))
+            chosen = pick_subtitle_files(names, video.season, episode, parse_episode_range(candidate.title))
             best: tuple[list[Cue], SyncReport] | None = None
             for name in chosen:
                 cues = _read_cues(root / name)
@@ -493,12 +535,12 @@ class SubtitleService:
                     best = (cues, report)
             return best
 
-    def _candidates(self, video: LibraryVideo, info: MediaInfo) -> list[SubtitleCandidate]:
+    def _candidates(self, video: LibraryVideo, info: MediaInfo, episode: int | None) -> list[SubtitleCandidate]:
         found: dict[tuple[str, str], SubtitleCandidate] = {}
-        for query in _queries(video):
+        for query in _queries(video, episode):
             for candidate in self._search(query):
-                if video.kind == "episode" and video.season is not None and video.episode is not None:
-                    ok = matches_episode(candidate, video.titles, video.season, video.episode) is not None
+                if video.kind == "episode" and video.season is not None and episode is not None:
+                    ok = matches_episode(candidate, video.titles, video.season, episode) is not None
                 else:
                     ok = matches_movie(candidate, video.titles, video.year, video.imdb_id)
                 if ok:
@@ -662,12 +704,23 @@ def open_store(state_dir: Path) -> SubtitleStore:
     return SubtitleStore(state_dir / "subs.db")
 
 
-def _queries(video: LibraryVideo) -> list[str]:
+def _episodes_to_try(video: LibraryVideo) -> list[int | None]:
+    """El episodio del video y despues sus vecinos (ver `_download_best`); `[None]` para una pelicula."""
+    if video.kind != "episode" or video.season is None or video.episode is None:
+        return [None]
+    return [video.episode, *(n for n in (video.episode - 1, video.episode + 1) if n >= 1)]
+
+
+def _episode_code(season: int, episode: int) -> str:
+    return f"S{season:02d}E{episode:02d}"
+
+
+def _queries(video: LibraryVideo, episode: int | None) -> list[str]:
     titles = [title for title in video.titles if normalize(title)][:2]
-    if video.kind == "episode" and video.season is not None and video.episode is not None:
-        code = f"S{video.season:02d}E{video.episode:02d}"
+    if video.kind == "episode" and video.season is not None and episode is not None:
+        code = _episode_code(video.season, episode)
         # el primer episodio de la temporada trae tambien los packs ("S01E01-11")
-        pack = f"S{video.season:02d}E01"
+        pack = _episode_code(video.season, 1)
         return list(dict.fromkeys([f"{t} {code}" for t in titles] + [f"{t} {pack}" for t in titles]))
     return list(dict.fromkeys(f"{t} {video.year}" if video.year else t for t in titles))
 

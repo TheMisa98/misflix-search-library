@@ -243,6 +243,83 @@ def test_candidates_that_fail_are_recorded_and_not_retried(lib):
     assert second.by_status == {SubtitleStatus.NOT_FOUND: 1}
     assert provider.downloads == ["wrong"]
     assert service.store.was_tried(lib.episode, "fake", "wrong")
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "el unico candidato no verifico"
+
+
+def test_not_found_says_when_the_repo_has_nothing_for_the_episode(lib):
+    service = lib.service(FakeProvider())
+
+    lib.run(service)
+
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake no tiene subtitulos de este episodio"
+
+
+def test_a_subtitle_numbered_as_the_next_episode_is_found_and_verified(lib):
+    # House T6: "Broken" es E01+E02 en la biblioteca y un solo E01 en subdivx,
+    # asi que el E03 local esta subido como S06E02
+    provider = FakeProvider(
+        {
+            "same-code": (candidate("same-code", "House M.D. S01E01"), make_zip("a.srt", OTHER_EPISODE)),
+            "next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", shifted(SPANISH, 2))),
+        }
+    )
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    written = lib.episode.with_name(lib.episode.stem + ".es.srt")
+    assert max(abs(a.start - b.start) for a, b in zip(read(written), SPANISH, strict=True)) < 0.1
+    assert provider.downloads == ["same-code", "next-code"]
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake #next-code, subido como S01E02"
+    assert service.store.was_tried(lib.episode, "fake", "next-code@S01E02")
+
+
+def test_neighbouring_episodes_are_not_tried_when_the_exact_one_verifies(lib):
+    provider = FakeProvider(
+        {
+            "same-code": (candidate("same-code", "House M.D. S01E01"), make_zip("a.srt", SPANISH)),
+            "next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", SPANISH)),
+        }
+    )
+
+    summary = lib.run(lib.service(provider))
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["same-code"]
+
+
+def test_a_pack_with_the_broadcast_numbering_gives_the_neighbouring_file(lib):
+    pack = io.BytesIO()
+    with zipfile.ZipFile(pack, "w") as archive:
+        archive.writestr("House 1x01.srt", format_srt(OTHER_EPISODE))
+        archive.writestr("House 1x02.srt", format_srt(SPANISH))
+    provider = FakeProvider({"pack": (candidate("pack", "House M.D. S01E01-11"), pack.getvalue())})
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["pack"]  # la segunda vez sale de la cache
+    assert service.store.was_tried(lib.episode, "fake", "pack")
+    assert service.store.was_tried(lib.episode, "fake", "pack@S01E02")
+
+
+def test_a_wrong_neighbour_is_rejected_by_the_verifier(lib):
+    provider = FakeProvider(
+        {"next-code": (candidate("next-code", "House M.D. S01E02"), make_zip("b.srt", OTHER_EPISODE))}
+    )
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.NOT_FOUND: 1}
+    assert not lib.episode.with_name(lib.episode.stem + ".es.srt").exists()
+    record = service.store.get_video(lib.episode)
+    assert record is not None and record.detail == "fake no tiene subtitulos de este episodio"
 
 
 def test_not_found_is_retried_only_after_the_waiting_period(lib):

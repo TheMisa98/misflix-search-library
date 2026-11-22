@@ -251,3 +251,16 @@ SQLite serializa la base, pero no los archivos de la biblioteca. Se usa un `floc
 exclusivo y no bloqueante sobre `subs.lock` junto a la base: es del kernel, se libera
 solo si el proceso muere (no quedan candados huérfanos) y no agrega dependencias. La
 pasada que no lo obtiene no hace nada (`busy`).
+
+## 2026-11-22 — Probar los episodios vecinos cuando el exacto no verifica
+
+Verificado en vivo: en House T6 todos los episodios desde el E03 quedaban
+`no_encontrado`. La biblioteca (numeración de TVDB) parte el estreno doble "Broken" en
+E01+E02, y los subtítulos de subdivx de 2009 siguen la numeración de la emisión, donde es
+un solo E01: cada "S06Eyy" de subdivx es el E(yy+1) local. Alternativas descartadas:
+mapear numeraciones con TVDB/TMDB (otra API y otra dependencia, y no dice qué numeración
+usó cada uploader) o buscar por título de episodio (subdivx casi nunca lo pone en el
+título del candidato). Elegido: si nada del código exacto verifica, probar los candidatos
+de E−1 y E+1 con el mismo verificador, que es el que descarta los que no son (un
+subtítulo de otro episodio da ~0). Cuesta poco: las búsquedas y descargas de un vecino
+casi siempre ya están en caché, porque son las de ese mismo episodio.

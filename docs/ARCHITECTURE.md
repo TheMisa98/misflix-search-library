@@ -531,8 +531,18 @@ por episodio) — ver `docs/DECISIONS.md`.
    (o por IMDb en películas, que subdivx casi siempre trae); ordena por parecido a
    la versión local (`core/subtitles/matching.py`); prueba hasta 6 candidatos no
    probados antes y escribe el primero que verifica como `<video>.es.srt`. Si
+   ningún candidato del episodio exacto verifica, repite con los del episodio
+   anterior y el siguiente (hasta 6 de cada uno): la numeración de la
+   biblioteca (TVDB) y la de subdivx (la de la emisión) se corren en uno cuando
+   un episodio doble cuenta como uno en una y como dos en la otra. Verificado en
+   vivo en House T6: "Broken" es E01+E02 en la biblioteca y un solo E01 en
+   subdivx, así que el "S06E03" de subdivx es *The Tyrant* y el E03 local es
+   *Epic Fail*. El verificador descarta los vecinos que no son; un pack se
+   prueba una vez por numeración (`<id>@S06E02` en la tabla de intentos). Si
    ninguno verifica pero hubo uno dudoso y el video no tiene nada en español, lo
-   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado).
+   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado). El
+   detalle de `no_encontrado` distingue "subdivx no tiene subtítulos de este
+   episodio" de "ninguno de los N candidatos verificó".
 5. Estado en SQLite (`state_dir/subs.db`, `infra/subtitle_store.py`): estado por
    video, candidatos probados (no se rebajan), búsquedas cacheadas 3 días y
    registro de cada archivo escrito/respaldado (`misflix subs status`).
