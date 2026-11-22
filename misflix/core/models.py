@@ -92,3 +92,44 @@ class Author:
     name: str
     source: str
     page_url: str
+
+
+@dataclass(frozen=True)
+class SubtitleCandidate:
+    """Un subtitulo publicado en un repo de subtitulos (ej. subdivx).
+
+    Attributes:
+        id: Identificador dentro de su `source`.
+        source: Nombre del provider que lo devolvio.
+        title: Titulo tal como lo cargo el uploader (ej. "House M.D. S01E01").
+        description: Descripcion libre del uploader; suele nombrar la version
+            de video para la que esta hecho (ej. "...para la version
+            bluray.x264-filmhd").
+        downloads: Cantidad de descargas (desempata entre candidatos igual de
+            parecidos al archivo local).
+        imdb_id: Id de IMDb (`tt...`), si el repo lo expone.
+        uploader: Nick de quien lo subio, si se conoce.
+        files: Cantidad de archivos que trae (mas de uno en packs de temporada).
+    """
+
+    id: str
+    source: str
+    title: str
+    description: str
+    downloads: int
+    imdb_id: str | None = None
+    uploader: str | None = None
+    files: int = 1
+
+
+@dataclass(frozen=True)
+class DownloadedFile:
+    """Un archivo descargado completo en memoria (subtitulos: pocos KB).
+
+    Attributes:
+        filename: Nombre de archivo sugerido por el servidor.
+        content: Bytes del archivo.
+    """
+
+    filename: str
+    content: bytes

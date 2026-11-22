@@ -134,3 +134,73 @@ Verificado en vivo: recorrer seguido las páginas de un autor largo en lectuland
 cliente HTTP (y no en el provider) porque beneficia a todo `StaticProvider` y no
 cambia ningún contrato. Sin dependencia nueva (descartado `tenacity` u otra lib de
 retry: el bucle es de 5 líneas).
+
+## 2026-11-22 — Gestor de subtítulos propio (subdivx) en vez de Bazarr
+
+Bazarr ya corre en el stack, pero no logra bajar de subdivx: su provider `subx`
+depende de una API de terceros con api key (vacía en la config), la web directa está
+detrás de un Cloudflare Managed Challenge, y los subtítulos vienen en `.zip`/`.rar`
+(packs de temporada con un `.srt` por episodio) que Bazarr no sabe abrir ni ordenar.
+Además el sincronizador que el usuario usaba fallaba con frecuencia. Se construyó
+`misflix subs` reutilizando lo que ya resolvía este repo (`infra/cloudflare.py` con la
+`cf_clearance` del navegador real, `unrar`). Ver `docs/ARCHITECTURE.md` § Subtítulos.
+
+## 2026-11-22 — Sincronía propia en Python puro, sin ffsubsync ni alass
+
+**Descartados**: `ffsubsync` (lo que usa Bazarr) solo corrige un desfase constante
++ framerate, y su detección de voz corre sobre la mezcla completa — justo las fallas
+que describió el usuario ("pone el subtítulo donde empieza a sonar el audio en
+general y no las voces"; episodios de House "mal sincronizados"). `alass` sí maneja
+cortes, pero es un binario externo (Rust) sin verificación de "este subtítulo es de
+otro episodio". **Elegido**: alineación por tramos con programación dinámica
+(penalización por corte + salto máximo de 20s), contra el subtítulo de texto
+incrustado en el video cuando existe y si no contra la voz del **canal central**
+(5.1/7.1), más un veredicto contra un modelo nulo (el subtítulo invertido en el
+tiempo). Sin dependencias nuevas (~2s por verificación). Calibrado en vivo con House
+S01E01; números en `docs/ARCHITECTURE.md`. Hallazgo de esa calibración: los dos
+`.srt` "mal sincronizados" de House S01E01 eran en realidad de otra serie (*Safe
+House*), no un desfase — por eso el veredicto distingue `no_coincide` de `corregible`.
+
+## 2026-11-22 — Verificar contra audio por arranques de voz, no por cobertura
+
+La alineación contra audio maximiza la cobertura (fracción de cada línea sobre voz),
+pero como métrica de verificación se dejaba engañar: un subtítulo de otra serie
+lograba +0.16 sobre el nulo eligiendo un framerate y un desfase de −205s que hacían
+coincidir sus zonas densas de diálogo. La verificación usa entonces la fracción de
+líneas que arrancan junto a un arranque de voz (+0.34…+0.43 correctos vs +0.00…+0.05
+de otra serie), y el desfase contra audio se limita a ±120s.
+
+## 2026-11-22 — Estado en SQLite (stdlib), caché aparte
+
+Pedido por el usuario ("¿sqlite, mongo, postgres o json?"). SQLite porque el daemon y
+los comandos manuales escriben a la vez (WAL + timeout serializan; un JSON reescrito
+entero perdería escrituras o quedaría corrupto si se corta), se puede consultar, y
+viene con Python — Mongo/Postgres serían un servidor más para ~2000 filas. El estado
+(`~/.local/state/misflix/subs.db`) y la caché regenerable
+(`~/.cache/misflix/subs/`: referencias extraídas, archivos bajados) están separados:
+borrar la caché solo obliga a releer videos.
+
+## 2026-11-22 — Nunca borrar subtítulos: respaldar, y solo reemplazar por algo verificado
+
+Todo `.srt` que se corrige o descarta se mueve a `~/.local/state/misflix/subs-respaldo/
+<fecha>/<ruta original>` y queda registrado en la tabla `actions`. Un subtítulo
+existente solo se reemplaza si el nuevo verifica (`sincronizado`/`corregible`); uno
+`dudoso` no se toca. Si ningún candidato verifica y el video no tiene nada en español,
+el mejor dudoso se escribe como `<video>.es.dudoso.srt` (marcado, no como si fuera
+bueno).
+
+## 2026-11-22 — `.rar` con `unrar`, no `7z`
+
+El `7z` de Fedora no trae el códec RAR (verificado en vivo: "Cannot open the file as
+archive" con `.rar` de subdivx que `unrar` abre bien). `unrar` ya era requisito del
+repo (zona-leros). Se extrae con `unrar e` (sin rutas) por seguridad: el contenido es
+de terceros.
+
+## 2026-11-22 — Daemon con polling + servicio de systemd de usuario
+
+La biblioteca está en NTFS vía `fuseblk`, que no emite eventos de inotify: el daemon
+hace una pasada cada 15 min (con las cachés de ffprobe/referencias, una pasada sin
+trabajo es casi gratis) del video más nuevo al más viejo. Si subdivx queda bloqueado
+por Cloudflare (nadie resolvió el captcha), no reabre el navegador en cada pasada:
+espera 1h, 2h, 4h… hasta 8h, y mientras tanto sigue verificando/corrigiendo lo que no
+necesita red.

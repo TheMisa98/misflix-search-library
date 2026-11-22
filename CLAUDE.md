@@ -22,7 +22,8 @@ mensaje o de los comentarios del código.
 - **hatchling** — build backend del script instalable (`misflix`).
 
 Requiere terminal **Kitty** (`kitten` en `PATH`) para renderizar portadas — ver
-`docs/ARCHITECTURE.md` § `ui/`.
+`docs/ARCHITECTURE.md` § `ui/`. `misflix subs` además usa `ffprobe`/`ffmpeg` y
+`unrar` del sistema (ver `docs/ARCHITECTURE.md` § Subtítulos).
 
 ## Arquitectura: monolito modular en capas
 
@@ -110,6 +111,8 @@ uv run pytest tests/test_download_service.py::test_download_creates_dest_dir_and
 uv run ruff check .                  # lint (estilo + orden de imports + docstrings estilo Google en misflix/)
 uv run ruff format .                 # auto-formato
 uv run mypy                          # chequeo de tipos de misflix/ (scoped vía [tool.mypy] files, tests/ excluido)
+misflix subs status                  # subtítulos en español: estado guardado (SQLite en ~/.local/state/misflix)
+misflix subs run "<ruta>"            # una pasada manual sobre una serie/temporada/película
 ```
 
 Docstrings en `misflix/` siguen la convención Google (línea de resumen, luego
@@ -127,9 +130,9 @@ función necesite uno.
 - Variables de entorno `MISFLIX_MOVIES_DIR`/`MISFLIX_SERIES_DIR`/`MISFLIX_BOOKS_DIR`
   en `.env` (ver `.env.example`), leídas por `misflix/config/settings.py`.
 - Un solo provider real de películas/series hoy: `zona-leros` (Cloudflare Managed
-  Challenge). Libros: `lectulandia`. Antes de agregar uno nuevo, revisar si
-  `docs/DECISIONS.md` ya cubre un patrón equivalente (Cloudflare, ad-lockers,
-  antupload).
+  Challenge). Libros: `lectulandia`. Subtítulos: `subdivx` (mismo Cloudflare).
+  Antes de agregar uno nuevo, revisar si `docs/DECISIONS.md` ya cubre un patrón
+  equivalente (Cloudflare, ad-lockers, antupload).
 
 ## Wiki interna (docs/)
 

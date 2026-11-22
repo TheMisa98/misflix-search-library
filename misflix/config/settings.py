@@ -18,11 +18,17 @@ class Settings:
         movies_dir: Carpeta destino para peliculas.
         books_dir: Carpeta destino para libros.
         series_dir: Carpeta destino para series.
+        state_dir: Estado persistente (la base SQLite de subtitulos y los
+            respaldos de los .srt reemplazados).
+        cache_dir: Cache regenerable (referencias de sincronia extraidas de
+            cada video).
     """
 
     movies_dir: Path
     books_dir: Path
     series_dir: Path
+    state_dir: Path
+    cache_dir: Path
 
 
 @lru_cache
@@ -37,4 +43,6 @@ def get_settings() -> Settings:
         movies_dir=Path(os.getenv("MISFLIX_MOVIES_DIR", "~/Descargas/Peliculas")).expanduser(),
         books_dir=Path(os.getenv("MISFLIX_BOOKS_DIR", "~/Descargas/Libros")).expanduser(),
         series_dir=Path(os.getenv("MISFLIX_SERIES_DIR", "~/Descargas/Series")).expanduser(),
+        state_dir=Path(os.getenv("XDG_STATE_HOME", "~/.local/state")).expanduser() / "misflix",
+        cache_dir=Path(os.getenv("XDG_CACHE_HOME", "~/.cache")).expanduser() / "misflix",
     )

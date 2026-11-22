@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from misflix.infra.cloudflare import (
     DEFAULT_IMPERSONATE,
     DEFAULT_USER_AGENT,
+    CloudflareBlockedError,
     CloudflareHttpClient,
     _default_user_agent,
     _newest_firefox_impersonate,
@@ -74,3 +77,41 @@ def test_try_get_returns_none_on_request_error(monkeypatch):
     monkeypatch.setattr(client, "_request", raise_error)
 
     assert client.try_get("https://anomizador.zona-leros.com/l?hs=abc") is None
+
+
+def test_post_returns_the_response_when_not_challenged(monkeypatch):
+    client = CloudflareHttpClient(domain="example.com")
+    calls = []
+
+    def fake_post(url, data, headers):
+        calls.append((url, data, headers))
+        return FakeResponse(200)
+
+    monkeypatch.setattr(client, "_post_request", fake_post)
+
+    response = client.post("https://example.com/inc/ajax.php", {"q": "x"}, {"X-Requested-With": "XMLHttpRequest"})
+
+    assert response.status_code == 200
+    assert calls == [("https://example.com/inc/ajax.php", {"q": "x"}, {"X-Requested-With": "XMLHttpRequest"})]
+
+
+def test_post_resolves_the_challenge_on_the_site_root_and_retries(monkeypatch):
+    client = CloudflareHttpClient(domain="example.com")
+    responses = iter([FakeResponse(403), FakeResponse(200)])
+    monkeypatch.setattr(client, "_post_request", lambda url, data, headers: next(responses))
+    resolved: list[str] = []
+    monkeypatch.setattr(client, "_resolve_via_browser", resolved.append)
+
+    response = client.post("https://example.com/inc/ajax.php", {})
+
+    assert response.status_code == 200
+    assert resolved == ["https://example.com/"]
+
+
+def test_post_raises_when_still_challenged_after_manual_resolution(monkeypatch):
+    client = CloudflareHttpClient(domain="example.com")
+    monkeypatch.setattr(client, "_post_request", lambda url, data, headers: FakeResponse(403))
+    monkeypatch.setattr(client, "_resolve_via_browser", lambda url: None)
+
+    with pytest.raises(CloudflareBlockedError):
+        client.post("https://example.com/inc/ajax.php", {})
