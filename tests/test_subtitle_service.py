@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from misflix.core.models import DownloadedFile, SubtitleCandidate
+from misflix.core.ports import SubtitleProviderError
 from misflix.core.services import subtitle_service
 from misflix.core.services.subtitle_service import SubtitleService, SubtitleStatus
 from misflix.core.subtitles.media import MediaInfo, StreamInfo
@@ -63,20 +64,32 @@ def make_zip(name: str, cues: list[Cue]) -> bytes:
 class FakeProvider:
     name = "fake"
 
-    def __init__(self, files: dict[str, tuple[SubtitleCandidate, bytes]] | None = None, blocked: bool = False):
+    def __init__(
+        self,
+        files: dict[str, tuple[SubtitleCandidate, bytes]] | None = None,
+        blocked: bool = False,
+        down: bool = False,
+        missing: frozenset[str] = frozenset(),
+    ):
         self.files = files or {}
         self.blocked = blocked
+        self.down = down
+        self.missing = missing
         self.searches: list[str] = []
         self.downloads: list[str] = []
 
     def search(self, query: str) -> list[SubtitleCandidate]:
         if self.blocked:
             raise CloudflareBlockedError("bloqueado")
+        if self.down:
+            raise SubtitleProviderError("subdivx no respondio")
         self.searches.append(query)
         return [candidate for candidate, _ in self.files.values()]
 
     def download(self, candidate: SubtitleCandidate) -> DownloadedFile:
         self.downloads.append(candidate.id)
+        if candidate.id in self.missing:
+            raise SubtitleProviderError("HTTP Error 404")
         return DownloadedFile(filename=f"{candidate.id}.zip", content=self.files[candidate.id][1])
 
 
@@ -365,3 +378,48 @@ def test_videos_are_re_evaluated_when_a_missing_detection_tool_gets_installed(li
     summary = lib.run(with_ocr)
 
     assert summary.by_status == {SubtitleStatus.SPANISH_BURNED: 1}
+
+
+def test_a_candidate_that_fails_to_download_is_skipped_and_not_marked_as_tried(lib):
+    provider = FakeProvider(
+        {
+            "gone": (candidate("gone", description="para bluray.x264-filmhd"), b""),
+            "good": (candidate("good"), make_zip("b.srt", shifted(SPANISH, 2))),
+        },
+        missing=frozenset({"gone"}),
+    )
+    service = lib.service(provider)
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.DOWNLOADED: 1}
+    assert provider.downloads == ["gone", "good"]
+    assert not service.store.was_tried(lib.episode, "fake", "gone")
+
+
+def test_a_provider_outage_leaves_the_video_pending_instead_of_crashing(lib):
+    service = lib.service(FakeProvider(down=True))
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.PENDING: 1}
+    assert summary.aborted is None
+
+
+def test_an_unexpected_error_in_one_video_does_not_stop_the_run(lib, monkeypatch):
+    second = lib.episode.with_name("house.s01e02.1080p.bluray.x264-filmhd.mkv")
+    second.write_bytes(b"video")
+    service = lib.service()
+    real = service._process
+
+    def flaky(video, base, download):
+        if "s01e02" in video.path.name:
+            raise KeyError("bug")
+        return real(video, base, download)
+
+    monkeypatch.setattr(service, "_process", flaky)
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))
+
+    summary = lib.run(service)
+
+    assert summary.by_status == {SubtitleStatus.IN_SYNC: 1, SubtitleStatus.ERROR: 1}

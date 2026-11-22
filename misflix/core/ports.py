@@ -150,6 +150,16 @@ class AuthorProvider(SourceProvider, Protocol):
         ...
 
 
+class SubtitleProviderError(RuntimeError):
+    """El repo de subtitulos fallo (caido, respuesta inesperada, descarga que no existe).
+
+    Los providers envuelven en esta excepcion cualquier error de red o de
+    formato, asi el servicio puede tratarlos sin conocer el cliente HTTP que
+    usa cada uno. Un desafio de Cloudflare sin resolver es otra cosa
+    (`CloudflareBlockedError`): ahi el repo no esta caido, falta el usuario.
+    """
+
+
 @runtime_checkable
 class SubtitleProvider(Protocol):
     """Contrato de un repo de subtitulos (hoy subdivx).

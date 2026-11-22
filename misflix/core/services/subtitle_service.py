@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from misflix.core.models import DownloadedFile, SubtitleCandidate
-from misflix.core.ports import SubtitleProvider
+from misflix.core.ports import SubtitleProvider, SubtitleProviderError
 from misflix.core.subtitles.matching import (
     matches_episode,
     matches_movie,
@@ -248,6 +248,10 @@ class SubtitleService:
                 record = self.process(video, download=False)
             except FileNotFoundError:
                 continue  # se borro/movio durante la pasada
+            except Exception as exc:  # un video roto no puede tirar abajo el daemon
+                self.log(f"{'error':>18}  {video.path.name}  error inesperado: {exc!r}")
+                summary.by_status[SubtitleStatus.ERROR] += 1
+                continue
             summary.processed += 1
             summary.by_status[record.status] += 1
         return summary
@@ -296,6 +300,8 @@ class SubtitleService:
         base = VideoRecord(path=str(video.path), size=stat.st_size, mtime=stat.st_mtime, status="")
         try:
             record = self._process(video, base, download)
+        except SubtitleProviderError as exc:
+            record = _with(base, SubtitleStatus.PENDING, str(exc)[:300], retry=_RETRY_PENDING)
         except (MediaProbeError, ExtractionError, OSError, ValueError) as exc:
             record = _with(base, SubtitleStatus.ERROR, str(exc)[:300], retry=_RETRY_ERROR)
         record = replace(record, sidecars=_sidecar_signature(video.path), detected=",".join(sorted(self._tools)))
@@ -415,7 +421,13 @@ class SubtitleService:
             if self.store.was_tried(video.path, candidate.source, candidate.id):
                 continue
             tried += 1
-            outcome = self._try_candidate(video, candidate, reference)
+            try:
+                outcome = self._try_candidate(video, candidate, reference)
+            except SubtitleProviderError as exc:
+                # no se registra como probado: puede ser pasajero (verificado en vivo:
+                # 404 durante una actualizacion del sitio)
+                self.log(f"  no se pudo bajar {candidate.source} #{candidate.id}: {exc}")
+                continue
             if outcome is None:
                 self.store.add_attempt(video.path, candidate.source, candidate.id, "sin_srt_utilizable", None)
                 continue

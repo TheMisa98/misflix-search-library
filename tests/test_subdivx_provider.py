@@ -161,3 +161,49 @@ def test_download_falls_back_to_the_id_without_content_disposition():
     downloaded = provider.download(SubtitleCandidate(id="1", source="subdivx", title="t", description="", downloads=0))
 
     assert downloaded.filename == "1.bin"
+
+
+class VersionChangingHttp(FakeHttp):
+    """subdivx actualiza el sitio en medio de una pasada (verificado en vivo: v4.53 -> v4.61)."""
+
+    def __init__(self):
+        super().__init__(gets={})
+        self.homes = iter(['<div id="vs">v4.53</div>', '<div id="vs">v4.61</div>'])
+
+    def get(self, url: str) -> FakeResponse:
+        self.calls.append(("GET", url))
+        if url == "https://subdivx.com/":
+            return FakeResponse(next(self.homes))
+        return FakeResponse('{"token": "t"}')
+
+    def post(self, url, data, headers=None) -> FakeResponse:
+        self.calls.append(("POST", url, dict(data), dict(headers or {})))
+        if "buscar461" in data:
+            return FakeResponse((FIXTURES / "search_house_s01e01.json").read_text())
+        return FakeResponse("<html>Error</html>")
+
+
+def test_search_rereads_the_site_version_when_the_response_is_unexpected():
+    http = VersionChangingHttp()
+    provider = SubdivxProvider(http_client=http, sleep=lambda _: None)
+
+    results = provider.search("house s01e01")
+
+    assert results
+    posts = [call[2] for call in http.calls if call[0] == "POST"]
+    assert ["buscar453" in p for p in posts] == [True, False]
+    assert "buscar461" in posts[1]
+
+
+def test_network_errors_become_provider_errors():
+    from misflix.core.ports import SubtitleProviderError
+
+    class BrokenHttp(FakeHttp):
+        def get(self, url):
+            raise OSError("HTTP Error 404")
+
+    provider = SubdivxProvider(http_client=BrokenHttp(gets={}), sleep=lambda _: None)
+    candidate = SubtitleCandidate(id="1", source="subdivx", title="t", description="", downloads=0)
+
+    with pytest.raises(SubtitleProviderError, match="404"):
+        provider.download(candidate)

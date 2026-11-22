@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import Protocol
 
 from misflix.core.models import DownloadedFile, SubtitleCandidate
+from misflix.core.ports import SubtitleProviderError
 from misflix.infra.cloudflare import CloudflareHttpClient
 
 BASE_URL = "https://subdivx.com"
@@ -70,7 +71,7 @@ class FormHttpClient(Protocol):
         ...
 
 
-class SubtitleSearchError(RuntimeError):
+class SubtitleSearchError(SubtitleProviderError):
     """subdivx respondio algo inesperado (cambio el sitio, o un error del servidor)."""
 
 
@@ -125,9 +126,24 @@ class SubdivxProvider:
         Returns:
             Candidatos tal como los lista subdivx.
 
+        Verificado en vivo: subdivx actualiza el sitio sin aviso y con eso
+        cambia el nombre del campo de busqueda (v4.53 -> v4.61 en medio de una
+        pasada de varias horas, y desde ahi cada busqueda con `buscar453`
+        devolvia basura). Si la respuesta no es la esperada, se vuelve a leer
+        la version de la home y se reintenta una vez.
+
         Raises:
-            SubtitleSearchError: Si la respuesta no tiene el formato esperado.
+            SubtitleSearchError: Si la respuesta sigue sin tener el formato
+                esperado tras releer la version del buscador.
+            SubtitleProviderError: Si subdivx no responde.
         """
+        try:
+            return self._search_once(query)
+        except SubtitleSearchError:
+            self._search_field = None  # el sitio pudo haber cambiado de version
+            return self._search_once(query)
+
+    def _search_once(self, query: str) -> list[SubtitleCandidate]:
         field = self._get_search_field()
         token = self._get_token()
         response = self._throttled(
@@ -139,9 +155,9 @@ class SubdivxProvider:
         )
         try:
             rows = json.loads(response.text)["aaData"]
+            return [_candidate_from_row(row) for row in rows]
         except (ValueError, KeyError, TypeError) as exc:
             raise SubtitleSearchError(f"Respuesta inesperada de subdivx al buscar {query!r}.") from exc
-        return [_candidate_from_row(row) for row in rows]
 
     def download(self, candidate: SubtitleCandidate) -> DownloadedFile:
         """Descarga el archivo de `candidate`.
@@ -151,6 +167,10 @@ class SubdivxProvider:
 
         Returns:
             El .zip/.rar (o .srt suelto) tal cual lo sirve subdivx.
+
+        Raises:
+            SubtitleProviderError: Si subdivx no lo pudo servir (ej. 404 de un
+                subtitulo borrado).
         """
         response = self._throttled(lambda: self.http.get(f"{BASE_URL}/descargar.php?f=1&id={candidate.id}"))
         match = _FILENAME_RE.search(response.headers.get("content-disposition") or "")
@@ -180,6 +200,8 @@ class SubdivxProvider:
                 self._sleep(wait)
         try:
             return request()
+        except OSError as exc:  # errores de red/HTTP del cliente (curl_cffi los hereda de OSError)
+            raise SubtitleProviderError(f"subdivx no respondio: {exc}") from exc
         finally:
             self._last_request = self._clock()
 
