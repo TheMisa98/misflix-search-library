@@ -455,7 +455,13 @@ services, or UI:
   multi-line paste doesn't interleave with the prompt) and `progress_bar` (per-part rich
   progress).
 - **`misflix/config/settings.py`** — reads `MISFLIX_MOVIES_DIR` / `MISFLIX_SERIES_DIR` /
-  `MISFLIX_BOOKS_DIR` from `.env` (see `.env.example`) via `python-dotenv`, plus
+  `MISFLIX_BOOKS_DIR` (see `.env.example`) via `python-dotenv` from the repo's `.env`
+  (when running from source; it wins) and from `~/.config/misflix/.env`
+  (`$XDG_CONFIG_HOME`): the installed `misflix` lives in uv's tool folder, with no repo
+  around it, so that is the file it reads. Neither overrides real environment variables
+  (e.g. the systemd unit's). `config show` lists which `.env` files were read, and
+  `subs run RUTA` refuses a path outside the configured library instead of silently
+  evaluating nothing. It also resolves
   `state_dir` (`$XDG_STATE_HOME/misflix`, default `~/.local/state/misflix`: the
   subtitle SQLite DB and the backups of replaced `.srt`) and `cache_dir`
   (`$XDG_CACHE_HOME/misflix`: regenerable per-video sync references and downloaded
