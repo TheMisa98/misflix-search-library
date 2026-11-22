@@ -306,3 +306,19 @@ días. Videos e intentos guardan ahora la versión con que se evaluaron
 (`VERIFIER_VERSION`, columna `verifier` con migración como la de `detected`): al
 subirla, la pasada siguiente reevalúa esos videos y vuelve a verificar los candidatos
 que fallaron. Solo cuesta CPU: las descargas están en caché.
+
+## 2026-11-22 — Avisos de escritorio: uno por video nuevo, el resto agrupado y solo si algo cambió
+
+El usuario quiere enterarse cuando el servicio procesa un episodio o película nueva. El
+aviso que había era uno al final de cada pasada contando estados ("2 descargado,
+1 dudoso"): no decía de qué video y contaba también los reintentos que no cambiaban
+nada, así que cada reintento semanal de un dudoso volvía a avisar "1 dudoso".
+`SubtitleService.run` ahora entrega cada video con su estado de antes y el de después
+(`on_result`), y la CLI decide los avisos. "Nuevo" es "nunca evaluado" (sin fila en la
+base): no hace falta guardar nada más, y un archivo renombrado cuenta como nuevo, lo
+cual está bien porque para el servicio lo es. Cada video nuevo avisa apenas termina,
+con su resultado, hasta 5 por pasada. Agregar una temporada entera, o la primera
+pasada sobre una biblioteca grande, terminaría en decenas de avisos: el resto va
+contado en un solo aviso al final. Ese aviso también incluye lo que cambió los
+subtítulos de videos ya conocidos: bajados, resincronizados, dudosos nuevos o
+restaurados. Un video que sigue igual no avisa.

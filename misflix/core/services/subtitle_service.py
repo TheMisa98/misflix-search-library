@@ -180,7 +180,7 @@ class _Reference:
 
 @dataclass(frozen=True)
 class _Found:
-    """Subtitulo bajado que verifico, ya escrito junto al video."""
+    """Subtitulo bajado y ya escrito junto al video: el que verifico o, si ninguno, el mas probable como dudoso."""
 
     path: Path
     report: SyncReport
@@ -230,6 +230,7 @@ class SubtitleService:
         force: bool = False,
         download: bool = True,
         on_progress: Callable[[int, int, LibraryVideo], None] | None = None,
+        on_result: Callable[[LibraryVideo, VideoRecord | None, VideoRecord], None] | None = None,
     ) -> RunSummary:
         """Hace una pasada sobre la biblioteca (o la parte bajo `path_prefix`).
 
@@ -246,6 +247,11 @@ class SubtitleService:
             force: Reevaluar aunque el estado guardado diga que esta listo.
             download: Si es False, solo verifica/corrige lo que ya hay.
             on_progress: Callback `(indice, total, video)` antes de cada video.
+            on_result: Callback `(video, antes, despues)` al terminar cada
+                video: el estado guardado antes de evaluarlo (None si nunca
+                se habia evaluado, o sea, es nuevo en la biblioteca) y el
+                resultante. No se llama si el video fallo con un error
+                inesperado.
 
         Returns:
             El resumen de la pasada (`aborted` dice si el repo quedo bloqueado;
@@ -254,7 +260,7 @@ class SubtitleService:
         with exclusive_lock(self.store.path.with_name("subs.lock")) as acquired:
             if not acquired:
                 return RunSummary(busy=True)
-            return self._run(movies_dir, series_dir, path_prefix, force, download, on_progress)
+            return self._run(movies_dir, series_dir, path_prefix, force, download, on_progress, on_result)
 
     def _run(
         self,
@@ -264,6 +270,7 @@ class SubtitleService:
         force: bool,
         download: bool,
         on_progress: Callable[[int, int, LibraryVideo], None] | None,
+        on_result: Callable[[LibraryVideo, VideoRecord | None, VideoRecord], None] | None,
     ) -> RunSummary:
         self._run_stamp = datetime.now(UTC).strftime("%Y-%m-%d_%H%M%S")
         # se recalcula por pasada: el daemon corre dias y el usuario puede
@@ -282,6 +289,7 @@ class SubtitleService:
         for index, video in enumerate(pending, start=1):
             if on_progress:
                 on_progress(index, len(pending), video)
+            previous = self.store.get_video(video.path)
             try:
                 record = self.process(video, download=download)
             except CloudflareBlockedError as exc:
@@ -298,6 +306,8 @@ class SubtitleService:
                 continue
             summary.processed += 1
             summary.by_status[record.status] += 1
+            if on_result:
+                on_result(video, previous, record)
         return summary
 
     def needs_work(self, video: LibraryVideo) -> bool:
@@ -431,11 +441,14 @@ class SubtitleService:
             return _with(base, SubtitleStatus.PENDING, "falta bajar un subtitulo", _RETRY_PENDING)
 
         found, offered = self._download_best(video, info, reference)
-        if found is not None:
+        if found is not None and _verified(found.report):
             for path, _ in existing:  # los dudosos que habia: ya hay uno verificado
                 if path.exists() and path != found.path:
                     self._backup(video.path, path, "reemplazado por uno verificado")
             return _with(base, SubtitleStatus.DOWNLOADED, found.source, None, found.path, found.report)
+        if found is not None:  # ninguno verifico: quedo el mas probable, marcado como dudoso
+            detail = f"ningun candidato verifico; el mas probable ({found.source}) quedo como dudoso"
+            return _with(base, SubtitleStatus.UNCERTAIN, detail, _RETRY_NOT_FOUND, found.path, found.report)
 
         if uncertain:
             path, report = uncertain[0]
@@ -528,8 +541,10 @@ class SubtitleService:
         es "Epic Fail". El verificador descarta los vecinos que no son.
 
         Returns:
-            Lo escrito (None si nada verifico) y cuantos candidatos ofrecio el
-            repo para el episodio exacto (o la pelicula).
+            Lo escrito (None si nada): el primero que verifico o, si ninguno
+            verifico y el video no tiene nada en español, el mas probable
+            como `.es.dudoso.srt`; y cuantos candidatos ofrecio el repo para
+            el episodio exacto (o la pelicula).
         """
         best_uncertain: tuple[float, list[Cue], SyncReport, SubtitleCandidate] | None = None
         offered = 0
@@ -583,7 +598,9 @@ class SubtitleService:
             # Mejor algo para probar que nada: queda marcado en el nombre y en el estado.
             _, cues, report, candidate = best_uncertain
             fixed = apply_alignment(cues, report)
-            self._write(video.path, fixed, f"dudoso: {candidate.source} #{candidate.id}", suffix=_UNCERTAIN_SUFFIX)
+            source = f"{candidate.source} #{candidate.id}"
+            written = self._write(video.path, fixed, f"dudoso: {source}", suffix=_UNCERTAIN_SUFFIX)
+            return _Found(written, report, source), offered
         return None, offered
 
     def _try_candidate(

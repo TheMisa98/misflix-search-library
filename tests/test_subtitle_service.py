@@ -676,3 +676,50 @@ def test_a_run_does_nothing_while_another_one_holds_the_lock(lib):
     assert summary.busy
     assert summary.processed == 0
     assert lib.run(service).processed == 1  # libre otra vez
+
+
+def test_the_most_likely_candidate_is_left_as_dudoso_and_the_video_marked_as_such(lib, monkeypatch):
+    monkeypatch.setattr(
+        subtitle_service,
+        "check_against_subtitles",
+        lambda cues, reference: canned(SyncVerdict.UNCERTAIN, ReferenceKind.SUBTITLES, list(cues)),
+    )
+    service = lib.service(FakeProvider({"maybe": (candidate("maybe"), make_zip("a.srt", SPANISH))}))
+
+    summary = lib.run(service)
+
+    # antes quedaba `no_encontrado` con el .es.dudoso.srt al lado
+    assert summary.by_status == {SubtitleStatus.UNCERTAIN: 1}
+    uncertain = lib.episode.with_name(lib.episode.stem + ".es.dudoso.srt")
+    record = service.store.get_video(lib.episode)
+    assert record is not None and uncertain.exists() and record.subtitle_path == str(uncertain)
+    assert record.detail == "ningun candidato verifico; el mas probable (fake #maybe) quedo como dudoso"
+
+
+def test_each_result_is_reported_with_the_state_the_video_had_before(lib):
+    service = lib.service()
+    results: list[tuple[str | None, str]] = []
+
+    def on_result(video, previous, record):
+        results.append((previous.status if previous else None, record.status))
+
+    lib.run(service, on_result=on_result)
+    lib.episode.with_suffix(".srt").write_text(format_srt(SPANISH))  # cambia: se reevalua
+    lib.run(service, on_result=on_result)
+
+    assert results == [(None, SubtitleStatus.NOT_FOUND), (SubtitleStatus.NOT_FOUND, SubtitleStatus.IN_SYNC)]
+
+
+def test_a_video_that_fails_unexpectedly_is_not_reported(lib, monkeypatch):
+    service = lib.service()
+
+    def broken(video, download=True):
+        raise RuntimeError("roto")
+
+    monkeypatch.setattr(service, "process", broken)
+    results: list[object] = []
+
+    summary = lib.run(service, on_result=lambda *args: results.append(args))
+
+    assert summary.by_status == {SubtitleStatus.ERROR: 1}
+    assert results == []

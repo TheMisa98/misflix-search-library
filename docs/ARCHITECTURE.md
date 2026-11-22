@@ -548,7 +548,8 @@ por episodio) — ver `docs/DECISIONS.md`.
    *Epic Fail*. El verificador descarta los vecinos que no son; un pack se
    prueba una vez por numeración (`<id>@S06E02` en la tabla de intentos). Si
    ninguno verifica pero hubo uno dudoso y el video no tiene nada en español, lo
-   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado). El
+   escribe como `<video>.es.dudoso.srt` (visible en Jellyfin, marcado) y el
+   video queda `dudoso`. El
    detalle de `no_encontrado` distingue "subdivx no tiene subtítulos de este
    episodio" de "ninguno de los N candidatos verificó".
 5. Estado en SQLite (`state_dir/subs.db`, `infra/subtitle_store.py`): estado por
@@ -635,7 +636,16 @@ los créditos además se sacan del archivo final.
   exclusivo sobre `state_dir/subs.lock` (`infra/process_lock.py`); si ya lo
   tiene otro proceso (el servicio, o un `misflix subs run` manual), no hace
   nada y devuelve `busy` — el manual avisa y sale, el daemon reintenta en el
-  próximo intervalo.
+  próximo intervalo. Al terminar una pasada con trabajo, el log dice cuántos
+  videos evaluó y en cuánto es la próxima.
+- Avisos de escritorio del daemon (`_PassNotices` en `cli/subs.py`, vía
+  `notify-send`): `run(on_result=...)` entrega cada video con su estado de
+  antes (None si nunca se evaluó) y el de después. Un video nuevo avisa apenas
+  se termina con él ("Subtítulo listo — House 6x03", "Sin subtítulo por ahora
+  … se vuelve a intentar el 29/11"), hasta 5 por pasada. Lo demás que cambió
+  los subtítulos (bajados, resincronizados, restaurados, dudosos nuevos) y los
+  nuevos que pasaron el tope van en un solo aviso al final, con nombres si son
+  hasta 3. Un video que se reevalúa y queda igual no avisa.
 
 ## Agregar un provider nuevo
 
